@@ -315,9 +315,10 @@
                             <!-- установленная программа (Э7): что с ней сделать при применении -->
                             <StackPanel Margin="0,24,0,0" Visibility="{Binding IsLocked, Converter={StaticResource Vis}}">
                                 <TextBlock Text="Программа установлена" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
-                                <Border Height="32" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
-                                        Background="{DynamicResource Control}" HorizontalAlignment="Left">
-                                    <StackPanel Orientation="Horizontal">
+                                <!-- две строки по две кнопки: в одну строку «Переустановить» и «Удалить» не помещались в ширину панели -->
+                                <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
+                                        Background="{DynamicResource Control}" HorizontalAlignment="Stretch">
+                                    <UniformGrid Columns="2">
                                         <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Оставить" Height="30" Padding="12,0"
                                                      IsChecked="{Binding ActKeep, Mode=TwoWay}" ToolTip="Не трогать установленную программу"/>
                                         <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Обновить" Height="30" Padding="12,0"
@@ -328,7 +329,7 @@
                                         <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Удалить" Height="30" Padding="12,0"
                                                      IsChecked="{Binding ActRemove, Mode=TwoWay}" IsEnabled="{Binding CanRemove}"
                                                      ToolTip="Удалить программу через winget. Вернуть её можно только установкой заново" ToolTipService.ShowOnDisabled="True"/>
-                                    </StackPanel>
+                                    </UniformGrid>
                                 </Border>
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" LineHeight="18" Margin="0,8,0,0"
                                            Text="Отметка установленной программы не снимается. Чтобы применить к ней сохранённые настройки, выберите «С моими настройками» ниже."/>
@@ -524,7 +525,7 @@
                                                            Foreground="{DynamicResource TextMuted}" VerticalAlignment="Top" Margin="0,2,0,0"/>
                                                 <StackPanel Grid.Column="1">
                                                     <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
-                                                    <TextBlock Text="{Binding Note}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0">
+                                                    <TextBlock Text="{Binding Note}" TextWrapping="Wrap" Margin="0,2,0,0">
                                                         <TextBlock.Style>
                                                             <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
                                                                 <Style.Triggers>

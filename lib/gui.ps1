@@ -487,7 +487,9 @@ function Set-UiBackdrop ($Win) {
 # размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
 function Get-UiStatePath { Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json' }
 function Read-UiState {
-    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
+    $p = Get-UiStatePath
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { return (Get-Content $p -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
 }
 function Save-UiState ($Win, [string]$Nav) {
     try {
@@ -824,6 +826,7 @@ function Show-SelectionDialog {
         }
         $ctl.ListEmpty.Visibility = if ($n -or $card) { 'Collapsed' } else { 'Visible' }
         $ctl.FilesCard.Visibility = if ($card) { 'Visible' } else { 'Collapsed' }
+        $ctl.List.Visibility = if ($card) { 'Collapsed' } else { 'Visible' }   # карточка «Файлов» вместо списка, а не поверх
         if ($n) { $ctl.List.ScrollIntoView($view.GetItemAt(0)) }
     }
 
@@ -1235,7 +1238,8 @@ function Show-SelectionDialog {
             [void]$items.Remove($it)
         }
         $ui.Bulk = $true
-        foreach ($f in @($List)) {
+        # @($null) в 5.1 — массив из одного элемента: без фильтра появлялся пустой файл «0 Б», пока «Мои данные» не подключены
+        foreach ($f in @($List | Where-Object { $_ })) {
             $it = New-FileItem $f $fk $fileGroup
             $it.IsChecked = ($want -contains $f.Name -or $want -contains $f.Title)
             $it.add_PropertyChanged($onChange)
