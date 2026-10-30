@@ -392,7 +392,7 @@
                                            LineHeight="16" LineStackingStrategy="BlockLineHeight" MaxHeight="32"/>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Style="{StaticResource ConfigBadge}" Tag="cfg"
+                                <Button Style="{StaticResource ConfigBadge}" Tag="cfg" AutomationProperties.Name="С моими настройками"
                                         Visibility="{Binding HasConfig, Converter={StaticResource Vis}}"/>
                                 <Border Style="{StaticResource Pill}" Visibility="{Binding Interactive, Converter={StaticResource Vis}}"
                                         ToolTip="Тихая установка невозможна: откроется мастер установки">

@@ -227,6 +227,7 @@ try {
     }
     # список файлов окно получает само, в фоне: из релиза files «Моих данных»
     $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain
+    if ($script:PB.WindowShownSec) { Write-Host "  Окно открылось через $($script:PB.WindowShownSec) с после запуска." -ForegroundColor DarkGray }
     if (-not $sel) { Write-Host '  Отменено.'; return }
     $DryRun = $sel.DryRun
     $newName = $sel.Name
@@ -256,7 +257,19 @@ try {
         Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' 'SystemRestorePointCreationFrequency' 0
         Checkpoint-Computer -Description "tabula-rasa $($script:PB.Stamp)" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
         Write-Ok 'создана'
-    } catch { Write-Warn2 "не создана: $($_.Exception.Message)" }
+    } catch {
+        Write-Warn2 "не создана: $($_.Exception.Message)"
+        # без точки восстановления необратимое уже ничем не отменить — спросить, а не молча выполнить
+        $irr = @($preTw | Where-Object { $_.Irreversible })
+        if ($irr.Count) {
+            Write-Host '    Без точки восстановления эти изменения отменить будет невозможно:' -ForegroundColor Yellow
+            $irr | ForEach-Object { Write-Host "      - $($_.Name)" -ForegroundColor Yellow }
+            if ((Read-Host '    Выполнить их без точки восстановления? [y/N]') -notmatch '^[yYнН]') {
+                $preTw = @($preTw | Where-Object { -not $_.Irreversible })
+                $irr | ForEach-Object { Add-Result $_.Name 'пропущено' 'нет точки восстановления' }
+            }
+        }
+    }
 
     # ---------- 2. настройки ----------
     if ($preTw) { Write-Step 'Настройки Windows'; foreach ($t in $preTw) { Invoke-Tweak $t } }
@@ -266,7 +279,7 @@ try {
         Write-Step 'Программы'
         if (-not (Initialize-Winget)) { Write-Fail 'Без winget программы из каталога установить невозможно' }
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            & winget source update --name winget 2>$null | Out-Null
+            [void](Invoke-PbWingetTimed @('source', 'update', '--name', 'winget') 5 'source_update')
         }
         foreach ($a in $selApps) {
             if ($a.Source -eq 'winget' -and -not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -314,7 +327,7 @@ finally {
     if ($script:PB.Results.Count) {
         Write-Step 'Итог'
         $script:PB.Results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
-        $fails = @($script:PB.Results | Where-Object { $_.'Статус' -eq 'ОШИБКА' })
+        $fails = @($script:PB.Results | Where-Object { $_.'Статус' -in 'ОШИБКА', 'ТАЙМАУТ' })
         if ($fails.Count) { Write-Host "  Ошибок: $($fails.Count). Подробности — в журнале выполнения" -ForegroundColor Red }
         else { Write-Host '  Ошибок нет' -ForegroundColor Green }
     }

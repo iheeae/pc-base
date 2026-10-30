@@ -135,12 +135,11 @@ function ConvertFrom-PbWingetTable ([string[]]$Lines) {
     return @($rows)
 }
 
-# winget с выводом в UTF-8 (иначе 5.1 читает его в кодовой странице консоли и позиции колонок съезжают)
+# winget с выводом в UTF-8 (иначе позиции колонок съезжают) и ограничением 2 мин: зависший winget не держит поиск
 function Invoke-PbWinget {
-    $enc = $null
-    try { $enc = [Console]::OutputEncoding; [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
-    try { return @(& winget @args 2>$null | ForEach-Object { "$_" }) }
-    finally { if ($enc) { try { [Console]::OutputEncoding = $enc } catch { } } }
+    $r = Invoke-PbWingetTimed @($args) 2 ('search_' + ($args -join '_'))
+    if ($r.TimedOut) { throw 'winget не ответил за 2 минуты.' }
+    return @($r.Out)
 }
 
 # объединить, убрать дубли по id, отсортировать: точное имя → начало имени → остальное (внутри — порядок winget)

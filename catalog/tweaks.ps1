@@ -234,14 +234,14 @@ $Tweaks = @(
            $old = $null
            if ((& powercfg.exe /getactivescheme) -match '([0-9a-fA-F-]{36})') { $old = $Matches[1] }
            & powercfg.exe /setactive SCHEME_MIN
-           [void]$script:PB.Changes.Add([ordered]@{ Kind = 'PowerScheme'; Old = $old })
+           Add-PbChange ([ordered]@{ Kind = 'PowerScheme'; Old = $old })
        } }
 
     @{ Id = 'sys.nohiber'; Name = 'Отключить гибернацию и быстрый запуск'; Desc = 'Отключает гибернацию (файл hiberfil.sys занимает несколько гигабайт) и быстрый запуск. Спящий режим сохраняется.'; Group = 'Система'; Os = @('10', '11'); Phase = 'pre'
        Apply = {
            $v = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name HibernateEnabled -ErrorAction SilentlyContinue).HibernateEnabled
            & powercfg.exe /hibernate off
-           [void]$script:PB.Changes.Add([ordered]@{ Kind = 'Hibernate'; WasEnabled = ($v -ne 0) })
+           Add-PbChange ([ordered]@{ Kind = 'Hibernate'; WasEnabled = ($v -ne 0) })
        } }
 
     # ============================== Среда (после установки программ) ==============================
@@ -259,7 +259,10 @@ $Tweaks = @(
        Apply = { Set-PwshProfile } }
 
     @{ Id = 'env.upgrade'; Name = 'Обновить все установленные программы (winget upgrade --all)'; Desc = 'В конце прогона обновляет все программы, известные winget. На рабочем компьютере затрагивает и корпоративное ПО.'; Group = 'Среда'; Os = @('10', '11'); Phase = 'post'
-       Apply = { & winget upgrade --all --silent --accept-package-agreements --accept-source-agreements --disable-interactivity } }
+       Apply = {
+           $r = Invoke-PbWingetTimed @('upgrade', '--all', '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity') 60 'upgrade_all'
+           if ($r.TimedOut) { throw "winget upgrade --all не завершился за 60 мин и прерван; журнал: $($r.Log)" }
+       } }
 )
 
 # ---------- функции для твиков «Среда» ----------
@@ -279,7 +282,9 @@ function Set-TerminalConfig {
 
     function Set-Prop ($Obj, [string]$Name, $Value) { $Obj | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force }
 
-    Set-Prop $cfg 'defaultProfile' $pwshGuid
+    # PowerShell 7 по умолчанию — только если он установлен (на старых сборках Windows 10 пакет может не встать)
+    if (Test-Path (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe')) { Set-Prop $cfg 'defaultProfile' $pwshGuid }
+    else { Write-Warn2 'PowerShell 7 не установлен: профиль Terminal по умолчанию не изменён'; Add-Manual 'Windows Terminal: выбрать PowerShell 7 профилем по умолчанию после его установки' }
     Set-Prop $cfg 'startOnUserLogin' $true
     Set-Prop $cfg 'minimizeToNotificationArea' $true
     Set-Prop $cfg 'disabledProfileSources' @('Windows.Terminal.Azure')
