@@ -34,7 +34,9 @@ Windows и файлов. Название в интерфейсе и текст�
   манифест новее движка — только чтение (`Assert-PbDataWritable`). Публичный репозиторий — push не выполняется
   (`Test-PbDataPrivate` в `Push-PbData`). Свой каталог (`lib/catalog.ps1`) — только декларативно, без кода.
 - **Настройки программ** — поле `Config` в каталоге (`Export` / `Import` в `lib/configs.ps1`); всё снятое проходит фильтр
-  секретов (`Remove-PbJsonSecrets` / `Remove-PbTextSecrets`) и показывается перед записью.
+  секретов (`Remove-PbJsonSecrets` / `Remove-PbTextSecrets`) и показывается перед записью. Пути профиля — переменными
+  (`ConvertTo-PbPortablePath` при снятии, `Expand-PbPortablePath` / `Copy-PbConfigIn` при применении). Реестр программ —
+  `Export-PbRegKey` → JSON → `Import-PbRegJson` через `Set-Reg`, не `reg import`.
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
   Переезд — `Move-PbLegacyDir` / `Update-PbOrigin` в `setup.ps1` и свой в `bootstrap.ps1`; ничего не удалять.
 
@@ -89,6 +91,6 @@ lib/configs.ps1      настройки программ: Export-*/Set-* по п
 catalog/apps.psd1    программы       catalog/tweaks.ps1  настройки Windows
 configs/             встроенное по умолчанию (pwsh_profile.ps1) и README с форматом «Моих данных»
 tools/               export-vivaldi.ps1 (обёртка Export-VivaldiConfig); upload-files.ps1 — файлы в релиз files, переезд с Google Drive
-tests/run.ps1        проверки без окна и без сети (winget ru/en, свой каталог, секреты, снятие, разметка)
+tests/run.ps1        проверки без окна и без сети (winget ru/en, свой каталог, секреты, пути профиля, снятие, реестр, разметка)
 .github/workflows/   pages.yml — bootstrap.ps1 на GitHub Pages: irm iheeae.github.io/tabula-rasa | iex
 ```

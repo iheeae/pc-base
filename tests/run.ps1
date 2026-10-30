@@ -126,12 +126,12 @@ try {
             '{"profile":{"name":"user"},"vivaldi":{"theme":{"current":"dark"},"sync":{"server":"x"},"mail":{"on":true},"tabs":{"stack":true}}}' | Set-Content (Join-Path $pd 'Preferences') -Encoding UTF8
             $catalog = (Import-PowerShellDataFile (Join-Path (Join-Path $root 'catalog') 'apps.psd1')).Apps
             $cap = @(Get-PbCaptureApps $catalog)
-            Check 'вкладка: 9 программ, на «компьютере» есть Git и Vivaldi' ($cap.Count -eq 9 -and (($cap | Where-Object Installed | ForEach-Object { $_.App.Id }) -join ',') -eq 'git,vivaldi') ($cap | ForEach-Object { "$($_.App.Id)=$($_.Installed)" })
+            Check 'вкладка: 19 программ, на «компьютере» есть Git и Vivaldi' ($cap.Count -eq 19 -and (($cap | Where-Object Installed | ForEach-Object { $_.App.Id }) -join ',') -eq 'git,vivaldi') ($cap | ForEach-Object { "$($_.App.Id)=$($_.Installed)" })
             $res = @(Invoke-PbCapture @($catalog | Where-Object { $_.Id -eq 'vivaldi' }) $stage)
             $v = Get-Content (Join-Path $stage $res[0].Files[0]) -Raw | ConvertFrom-Json
             Check 'vivaldi: тема и вкладки есть, sync и mail вырезаны, profile не взят' ($v.vivaldi.theme.current -eq 'dark' -and $v.vivaldi.tabs.stack -and -not $v.vivaldi.sync -and -not $v.vivaldi.mail -and -not $v.profile -and $res[0].Removed.Count -eq 2) @($v, $res[0].Removed)
         } finally { $env:LOCALAPPDATA = $oldLa }
-        Check '{MyDocuments} раскрывается' ((Expand-PbPath '{MyDocuments}\x') -eq ([Environment]::GetFolderPath('MyDocuments') + '\x'))
+        Check '{MyDocuments} раскрывается' ((Expand-PbPath '{MyDocuments}\x') -eq ([Environment]::GetFolderPath('MyDocuments') + [IO.Path]::DirectorySeparatorChar + 'x'))
         # применение Git сохраняет вход в GitHub на целевом компьютере
         $script:PB.DataRoot = $target | Split-Path; Rename-Item $target 'configs'
         Write-PbText (Join-Path $home2 '.gitconfig') @('[credential "https://github.com"]', '    helper = target-helper')
@@ -139,6 +139,74 @@ try {
         $after = @(Get-Content (Join-Path $home2 '.gitconfig') -Encoding UTF8)
         Check 'git: применение сохраняет credential компьютера' (($after -contains '    helper = target-helper') -and ($after -contains '    st = status') -and -not ($after -match 'gh auth')) $after
     } finally { $env:USERPROFILE = $oldProfile }
+
+    # ---------- пути профиля, вторая партия, реестр ----------
+    Write-Host 'пути профиля и вторая партия'
+    $saved = @{}; foreach ($n in 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA') { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    try {
+        $u = 'C:\' + 'Users\user'   # склеено, чтобы проверка на личное (C:\Users\<имя>) не срабатывала на пример
+        $env:USERPROFILE = $u; $env:APPDATA = "$u\AppData\Roaming"; $env:LOCALAPPDATA = "$u\AppData\Local"
+        $t = @("path=$u\AppData\Roaming\Wireshark\x", ('"p": "' + $u.Replace('\', '\\') + '\\AppData\\Local\\Programs\\code.cmd",'),
+            'file = c:/users/user/.ssh/config', "other = $($u)name\x", "home=$u") -join "`n"
+        $p = ConvertTo-PbPortablePath $t
+        $exp = @('path=%APPDATA%\Wireshark\x', '"p": "%LOCALAPPDATA%\\Programs\\code.cmd",', 'file = %USERPROFILE%/.ssh/config', "other = $($u)name\x", 'home=%USERPROFILE%') -join "`n"
+        Check 'пути → переменные: \, \\, /, регистр, чужой профиль не задет' ($p -eq $exp) $p
+        $env:USERPROFILE = 'D:\Профили\Пётр'; $env:APPDATA = 'D:\Профили\Пётр\AppData\Roaming'; $env:LOCALAPPDATA = 'D:\Профили\Пётр\AppData\Local'
+        Check 'переменные → пути другого компьютера, текст' ((Expand-PbPortablePath 'path=%APPDATA%\Wireshark x=%userprofile%/.ssh') -eq 'path=D:\Профили\Пётр\AppData\Roaming\Wireshark x=D:/Профили/Пётр/.ssh')
+        Check 'переменные → пути, JSON' ((Expand-PbPortablePath '"p": "%LOCALAPPDATA%\\Programs"' $true) -eq '"p": "D:\\Профили\\Пётр\\AppData\\Local\\Programs"')
+        $env:USERPROFILE = Join-Path $tmp 'u2'; $env:APPDATA = Join-Path $env:USERPROFILE 'Roaming'; $env:LOCALAPPDATA = Join-Path $env:USERPROFILE 'Local'
+
+        # снятие: пути заменяются во всех файлах, кодировка UTF-16 сохраняется
+        $ws = Join-Path $env:APPDATA 'Wireshark'
+        New-Item -ItemType Directory -Path (Join-Path (Join-Path $ws 'profiles') 'Work') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $ws 'preferences'), "gui.fileopen.dir: $(Join-Path $env:USERPROFILE 'caps')`n", (New-Object Text.UTF8Encoding $false))
+        [IO.File]::WriteAllText((Join-Path $ws 'recent'), "recent.capture_file: x.pcap`n")
+        [IO.File]::WriteAllText((Join-Path (Join-Path (Join-Path $ws 'profiles') 'Work') 'colorfilters'), "@TCP@tcp@[0,0,0]`n")
+        [IO.File]::WriteAllText((Join-Path (Join-Path (Join-Path $ws 'profiles') 'Work') 'recent_common'), "x`n")
+        $st2 = Join-Path $tmp 'stage2'
+        $res = @(Invoke-PbCapture @(@{ Id = 'wireshark'; Name = 'Wireshark'; Config = @{ Export = 'Export-WiresharkConfig' } }) $st2)
+        $prefs = Get-Content (Join-Path $st2 (Join-Path 'wireshark' 'preferences')) -Raw
+        Check 'wireshark: recent не взяты, профиль взят' (-not $res[0].Error -and $res[0].Files.Count -eq 2 -and -not ($res[0].Files -match 'recent')) $res[0]
+        Check 'wireshark: путь профиля заменён на %USERPROFILE%' ($prefs -match '%USERPROFILE%' -and $prefs -notmatch [regex]::Escape($env:USERPROFILE)) $prefs
+        $u16 = Join-Path $tmp 'u16.txt'
+        [IO.File]::WriteAllText($u16, "a=$($env:APPDATA)\x", (New-Object Text.UnicodeEncoding $false, $true))
+        Convert-PbTextFile $u16 { param($t) ConvertTo-PbPortablePath $t }
+        $b = [IO.File]::ReadAllBytes($u16)
+        Check 'UTF-16 остаётся UTF-16' ($b[0] -eq 0xFF -and $b[1] -eq 0xFE -and (Read-PbTextFile $u16).Text -eq 'a=%APPDATA%\x')
+
+        # применение раскрывает переменные под этот компьютер
+        $script:PB.DataRoot = Join-Path $tmp 'data2'
+        Copy-PbCapture $st2 $res[0].Files (Join-Path $script:PB.DataRoot 'configs')
+        Remove-Item $ws -Recurse -Force
+        Set-WiresharkConfig | Out-Null
+        $back = Get-Content (Join-Path $ws 'preferences') -Raw
+        Check 'wireshark: применение раскрыло путь' ($back -match [regex]::Escape((Join-Path $env:USERPROFILE 'caps'))) $back
+
+        # KeePassXC: пути к базам и Last… вырезаются; SumatraPDF: блоки FileStates и SessionData
+        $kp = Join-Path $env:APPDATA 'KeePassXC'; New-Item -ItemType Directory -Path $kp -Force | Out-Null
+        Write-PbText (Join-Path $kp 'keepassxc.ini') @('[General]', 'ConfigVersion=2', 'LastDatabases=C:/db.kdbx', 'LastKeyFiles=@Variant(x)', 'LastDir=C:/x', '[Security]', 'LockDatabaseIdle=true')
+        $res = @(Invoke-PbCapture @(@{ Id = 'keepassxc'; Name = 'KeePassXC'; Config = @{ Export = 'Export-KeePassXCConfig' } }) $st2)
+        $ini = @(Get-Content (Join-Path $st2 $res[0].Files[0]))
+        Check 'keepassxc: Last… вырезаны' (($ini -join '|') -eq '[General]|ConfigVersion=2|[Security]|LockDatabaseIdle=true' -and $res[0].Removed.Count -eq 3) $ini
+        $su = Join-Path $env:LOCALAPPDATA 'SumatraPDF'; New-Item -ItemType Directory -Path $su -Force | Out-Null
+        Write-PbText (Join-Path $su 'SumatraPDF-settings.txt') @('Theme = Dark', 'FileStates [', '  [', '    FilePath = C:\doc.pdf', '  ]', ']', 'SessionData [', ']', 'ZoomDefault = fit page', 'TimeOfLastUpdateCheck = 0 0')
+        $res = @(Invoke-PbCapture @(@{ Id = 'sumatra'; Name = 'SumatraPDF'; Config = @{ Export = 'Export-SumatraConfig' } }) $st2)
+        $su2 = @(Get-Content (Join-Path $st2 $res[0].Files[0]))
+        Check 'sumatra: без FileStates, SessionData и служебного' (($su2 -join '|') -eq 'Theme = Dark|ZoomDefault = fit page') $su2
+
+        # реестр: JSON → Set-Reg (подменён: в тестах реестр не трогаем), вырезанное фильтром не пишется
+        $script:Calls = New-Object System.Collections.ArrayList
+        function Set-Reg { param($Path, $Name, $Value, $Type) [void]$script:Calls.Add("$Path|$Name|$Type|$(@($Value) -join ',')") }
+        $rj = Join-Path $tmp 'reg.json'
+        [IO.File]::WriteAllText($rj, '{ "Values": { "Theme": { "Kind": "DWord", "Data": 2 }, "Editor": { "Kind": "String", "Data": "%LOCALAPPDATA%\\Programs\\x.exe" }, "Cut": { "Kind": "String" } },
+          "Keys": { "Interface": { "Values": { "Big": { "Kind": "QWord", "Data": 5000000000 }, "List": { "Kind": "MultiString", "Data": [ "a", "b" ] }, "Bin": { "Kind": "Binary", "Data": "AQID" } } } } }')
+        $n = Import-PbRegJson $rj 'Software\Test'
+        Check 'реестр: 5 значений через Set-Reg, вырезанное пропущено' ($n -eq 5 -and $script:Calls.Count -eq 5) $script:Calls
+        Check 'реестр: типы и раскрытый путь' (($script:Calls -contains 'HKCU:\Software\Test|Theme|DWord|2') -and ($script:Calls -contains "HKCU:\Software\Test|Editor|String|$($env:LOCALAPPDATA)\Programs\x.exe") -and
+            ($script:Calls -contains 'HKCU:\Software\Test\Interface|Big|QWord|5000000000') -and ($script:Calls -contains 'HKCU:\Software\Test\Interface|List|MultiString|a,b') -and
+            ($script:Calls -contains 'HKCU:\Software\Test\Interface|Bin|Binary|1,2,3')) $script:Calls
+        Remove-Item function:Set-Reg
+    } finally { foreach ($n in $saved.Keys) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) } }
 
     # ---------- разметка репозитория данных ----------
     Write-Host 'разметка'

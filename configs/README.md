@@ -22,7 +22,16 @@ C:\tabula-rasa-private\
     everything\Everything.ini
     powertoys\              settings.json общий и модулей
     git\gitconfig           .gitconfig без [credential] и http.extraheader
+    wireshark\              preferences, фильтры, макросы, profiles\ (без recent и recent_common)
+    winscp\configuration.json   реестр WinSCP 2\Configuration (без Sessions и History)
+    nanazip\, winmerge\, ditto\   registry.json — реестр программы без истории и недавних файлов
+    systeminformer\settings.xml, drawio\config.json, sumatra\SumatraPDF-settings.txt, keepassxc\keepassxc.ini,
+    sharex\ApplicationConfig.json и HotkeysConfig.json
 ```
+
+Пути профиля пользователя в снятых файлах записаны переменными `%USERPROFILE%`, `%APPDATA%`, `%LOCALAPPDATA%`
+и раскрываются при применении. Формат `registry.json`: `{ "Values": { "<имя>": { "Kind": "DWord", "Data": 1 } },
+"Keys": { "<подраздел>": { … } } }`; применяется через `Set-Reg`, поэтому отменяется `undo.ps1`.
 
 Файлы раздела «Файлы» хранятся не в папках репозитория, а ассетами его релиза `files` (`tools/upload-files.ps1`);
 в сохранении поле `Files` содержит имена ассетов.
