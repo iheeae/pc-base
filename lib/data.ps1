@@ -470,8 +470,9 @@ function Connect-PbData ($Sync) {
         if ((Test-Path $script:PB.DataRoot) -and @(Get-ChildItem $script:PB.DataRoot -Force).Count) {
             throw "Папка $($script:PB.DataRoot) уже существует и не является клоном репозитория. Переименуйте или удалите её."
         }
-        & gh repo view $repo --json name *> $null
-        if ($LASTEXITCODE -ne 0) {
+        # после переименования на GitHub старое имя ведёт редиректом на новое: такой репозиторий — не наш, создаём свой
+        $found = Invoke-PbGh repo view $repo --json nameWithOwner --jq .nameWithOwner
+        if ($found.Code -ne 0 -or "$($found.Out | Select-Object -First 1)" -ne $repo) {
             Step "Создание приватного репозитория $repo…"
             & gh repo create $repo --private --add-readme --description 'Мои данные для Tabula Rasa' *> $null
             if ($LASTEXITCODE -ne 0) { throw "Не удалось создать репозиторий $repo." }
