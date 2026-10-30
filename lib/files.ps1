@@ -5,7 +5,7 @@
 # После загрузки файл сверяется с sha256 из поля digest ассета. Ничего не устанавливается: файлы кладутся
 # в «Рабочий стол\tabula-rasa-files», запускаются вручную. Загрузка в релиз — tools\upload-files.ps1.
 #
-# Нужен вход в GitHub CLI (его выполняет подключение «Моих данных», lib\data.ps1). Список и загрузка — через REST
+# Нужен вход в GitHub CLI (его выполняет подключение «Моих данных», lib\data.ps1; там же Invoke-PbGh). Список и загрузка — через REST
 # (gh api, gh release download); строки JSON идут в base64, чтобы не зависеть от кодовой страницы консоли.
 
 $script:PbFilesTag = 'files'
@@ -15,23 +15,6 @@ function Get-PbFilesDir {
     $desk = [Environment]::GetFolderPath('Desktop')
     if (-not $desk) { $desk = Join-Path $HOME 'Desktop' }
     return (Join-Path $desk 'tabula-rasa-files')
-}
-
-# gh: возвращает @{ Code; Out }, stderr — строками вместе с выводом
-function Invoke-PbGh {
-    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $out = @(& gh @args 2>&1 | ForEach-Object { "$_" }) }
-    finally { $ErrorActionPreference = $prev }
-    return @{ Code = $LASTEXITCODE; Out = $out }
-}
-
-# понятный текст ошибки gh: нет сети, нет входа, нет доступа
-function Get-PbGhError ([string[]]$Out, [string]$What) {
-    $t = (@($Out) | Where-Object { $_ }) -join ' '
-    if ($t -match 'dial tcp|timeout|no such host|connection|socket|network') { return "Нет связи с GitHub. $t" }
-    if ($t -match 'auth login|not logged|HTTP 401|authentication') { return "Вход в GitHub CLI не выполнен: подключите «Мои данные» заново. $t" }
-    if ($t -match 'HTTP 403') { return "Нет доступа к репозиторию. $t" }
-    return "$What $t".Trim()
 }
 
 # id релиза files или $null, если его нет; ошибки сети и доступа — исключением

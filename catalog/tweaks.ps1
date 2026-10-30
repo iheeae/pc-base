@@ -309,7 +309,6 @@ function Set-PwshProfile {
     $docs = [Environment]::GetFolderPath('MyDocuments')
     $dst = Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1'
     New-Item -ItemType Directory -Path (Split-Path $dst) -Force | Out-Null
-    if (Test-Path $dst) { Copy-Item $dst "$dst.tabula-rasa_$($script:PB.Stamp).bak" -Force }
-    Copy-Item $src $dst -Force
+    Copy-PbConfigIn $src $dst   # с копией .bak; %USERPROFILE% и т. п. в своём профиле раскрываются (lib\configs.ps1)
     Write-Ok "профиль PowerShell: $dst"
 }

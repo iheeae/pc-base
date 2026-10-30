@@ -2,8 +2,10 @@
 # Разметка и стили — lib\ui\*.xaml, модель для привязок — lib\ui\model.cs. WPF нужен STA-поток:
 # setup.ps1 перезапускает себя с -STA, если запущен иначе.
 #   * слева навигация: Программы / Настройки Windows / Файлы по категориям со счётчиками, внизу «Итог»
-#   * в центре карточки категории; значки ⚙ (есть ConfigFn), мастер, необратимо, сайт видны без клика
-#   * справа подробности выделенного; у программ с ConfigFn — «Установка: с моими настройками / чистая»
+#   * в центре карточки категории; значки ⚙ (есть Config), мастер, необратимо, сайт, «мой каталог» видны без клика
+#   * справа подробности выделенного; у программ с Config — «Установка: с моими настройками / чистая»
+#   * в шапке — режим окна «Установка | Снятие настроек» (снятие: lib\configs.ps1) и «Программа» — добавить из winget
+#     в собственный каталог (lib\catalog.ps1, окно addapp.xaml)
 #   * поиск сверху — сразу по всем разделам; «Сохранения ▾» — свои наборы галочек (lib\data.ps1)
 #   * слева внизу «Мои данные»: подключить (вход в GitHub, клон своего приватного репозитория), отправить, отключить и удалить
 #   * «Файлы» — релиз files «Моих данных» (lib\files.ps1): список приходит в фоне; без подключения — карточка с кнопкой
@@ -14,6 +16,7 @@
 $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 . (Join-Path $PSScriptRoot 'data.ps1')
 . (Join-Path $PSScriptRoot 'files.ps1')
+. (Join-Path $PSScriptRoot 'catalog.ps1')
 
 # ---------- оформление ----------
 
@@ -176,6 +179,30 @@ function New-Fact ([string]$Label, [string]$Value, [string]$Tone = '') {
     return $f
 }
 
+# программа каталога (встроенного или собственного) → пункт окна
+function New-AppItem ($A, [string]$CatKey, [string]$Cat) {
+    $it = New-Object PcBase.Item
+    $it.Key = 'app:' + $A.Id; $it.Kind = 'app'; $it.Id = $A.Id; $it.Name = $A.Name
+    $it.Desc = $A.Desc; $it.FullDesc = $A.Desc
+    $it.CatKey = $CatKey; $it.CatName = "Программы · $Cat"; $it.GroupTitle = $it.CatName
+    $it.Interactive = [bool]$A.Interactive; $it.IsWeb = $A.Source -eq 'web'; $it.OpenSource = [bool]$A.OpenSource; $it.IsMine = [bool]$A.Mine
+    if ($A.Config -and $A.Config.Import) {
+        $it.HasConfig = $true; $it.ConfigName = 'с моими настройками'; $it.ConfigFile = $A.Config.File
+        $it.ConfigDesc = "Переносится: $($A.Config.Desc)$(if ($A.Config.Skip) { " Не переносится: $($A.Config.Skip)" })"
+    }
+    $it.SearchText = @($A.Name, $A.Desc, $A.Id, $A.WingetId, $Cat, $A.Note, $(if ($A.OpenSource) { 'open source' }), $(if ($A.Mine) { 'мой каталог' })) -join "`n"
+    if ($A.Source -eq 'web') {
+        $it.Facts.Add((New-Fact 'Источник' 'Официальный сайт: актуальная версия, запускается только с действительной подписью издателя'))
+        $it.Facts.Add((New-Fact 'Страница загрузки' $A.PageUrl 'mono'))
+    } else { $it.Facts.Add((New-Fact 'Источник' "winget: $($A.WingetId)" 'mono')) }
+    if ($A.Mine) { $it.Facts.Add((New-Fact 'Каталог' 'Собственный каталог в «Моих данных» (catalog\apps.psd1)')) }
+    if ($A.Note) { $it.Facts.Add((New-Fact 'Примечание' $A.Note)) }
+    if ($A.Interactive) { $it.Facts.Add((New-Fact 'Установка' 'Тихая установка невозможна: откроется мастер установки.')) }
+    if ($A.License) { $it.Facts.Add((New-Fact 'Лицензия' $A.License)) }
+    if ($A.Manual) { $it.Facts.Add((New-Fact 'Вручную после установки' $A.Manual)) }
+    return $it
+}
+
 # файл из релиза files (Get-PbFiles): имя — подпись, id — имя ассета
 function New-FileItem ($File, [string]$CatKey, [string]$Group) {
     $it = New-Object PcBase.Item
@@ -195,6 +222,118 @@ function New-FileItem ($File, [string]$CatKey, [string]$Group) {
     return $it
 }
 
+# ---------- «Добавить программу»: поиск в winget (в фоне) → выбор → @{ Name; WingetId; Desc; Category } или $null ----------
+
+function Show-AddAppDialog {
+    param($Owner, [hashtable]$Known, [string[]]$Categories)
+    $theme = Initialize-Ui
+    $d = New-UiWindow 'addapp.xaml' $theme
+    if ($Owner) { $d.Owner = $Owner }
+    $c = @{}
+    foreach ($n in 'Query', 'Find', 'Status', 'Results', 'Pick', 'PickName', 'PickId', 'PickInfo', 'PickDesc', 'PickCat', 'PickCats', 'Add', 'Cancel') { $c[$n] = $d.FindName($n) }
+    $rows = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
+    $c.Results.ItemsSource = $rows
+    $st = @{ Job = $null; Kind = $null; ShowId = $null; Info = @{}; Result = $null }
+    $c.PickCats.Text = "Существующие: $((@($Categories) + $script:PbUserCategory | Select-Object -Unique) -join ', ')."
+    $timer = New-Object Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(200)
+
+    # фоновая задача: search (строка запроса) или show (winget id)
+    function Start-Job2 ([string]$Kind, [string]$Arg) {
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({
+            param($Root, $Kind, $Arg)
+            . (Join-Path $Root 'lib\common.ps1'); . (Join-Path $Root 'lib\data.ps1'); . (Join-Path $Root 'lib\catalog.ps1')
+            Update-PbPath
+            if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'winget не найден. Установите App Installer из Microsoft Store или запустите Tabula Rasa через загрузчик.' }
+            if ($Kind -eq 'search') { Search-PbWinget $Arg } else { Get-PbWingetShow $Arg }
+        })
+        foreach ($a in @($script:PB.Root, $Kind, $Arg)) { [void]$ps.AddArgument($a) }
+        $st.Job = @{ Ps = $ps; Handle = $ps.BeginInvoke(); Kind = $Kind; Arg = $Arg }
+        $timer.Start()
+    }
+
+    function Start-Search {
+        $q = $c.Query.Text.Trim()
+        if (-not $q -or $st.Job) { return }
+        $rows.Clear(); $c.Pick.Visibility = 'Collapsed'; $c.Add.IsEnabled = $false
+        $c.Status.Text = "Поиск «$q» в winget…"; $c.Find.IsEnabled = $false
+        Start-Job2 'search' $q
+    }
+
+    function Update-PickInfo {
+        $it = $c.Results.SelectedItem
+        if (-not $it) { return }
+        $parts = @()
+        if ($it.Key) { $parts += "Версия $($it.Key)" }
+        $inf = $st.Info[$it.Id]
+        if ($inf) {
+            if ($inf.Publisher) { $parts += "Издатель: $($inf.Publisher)" }
+            if ($inf.License) { $parts += "Лицензия: $($inf.License)" }
+            if ($inf.Homepage) { $parts += $inf.Homepage }
+            if (-not $c.PickDesc.Text -and $inf.Description) { $t = $inf.Description; if ($t.Length -gt 300) { $t = $t.Substring(0, 300).TrimEnd() + '…' }; $c.PickDesc.Text = $t }
+        } elseif ($st.Job -and $st.Job.Kind -eq 'show') { $parts += 'Загрузка сведений…' }
+        else { $parts += "Издатель: $(($it.Id -split '\.')[0])" }
+        if ($it.IsChecked) { $parts += "Уже в каталоге: «$($Known[$it.Id.ToLower()])»" }
+        $c.PickInfo.Text = $parts -join "`n"
+    }
+
+    $timer.add_Tick({
+        $j = $st.Job
+        if (-not $j -or -not $j.Handle.IsCompleted) { return }
+        $timer.Stop()
+        $res = $null; $err = $null
+        try { $res = @($j.Ps.EndInvoke($j.Handle) | ForEach-Object { $_.PSObject.BaseObject }) }
+        catch { $err = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message } }
+        $j.Ps.Dispose(); $st.Job = $null
+        if ($j.Kind -eq 'search') {
+            $c.Find.IsEnabled = $true
+            if ($err) { $c.Status.Text = "Поиск не выполнен: $err" }
+            else {
+                foreach ($r in $res) {
+                    $it = New-Object PcBase.Item
+                    $it.Kind = 'found'; $it.Id = $r.Id; $it.Name = $r.Name; $it.Key = $r.Version
+                    $it.IsChecked = $Known.ContainsKey($r.Id.ToLower())   # уже в каталоге
+                    $it.Desc = "$($r.Id)$(if ($r.Version) { " · $($r.Version)" })$(if ($it.IsChecked) { ' · уже в каталоге' })"
+                    $rows.Add($it)
+                }
+                $c.Status.Text = if ($rows.Count) { "Найдено: $($rows.Count). Выберите программу." } else { 'Ничего не найдено. Название вводится на английском, например notepad plus, 7zip, obs.' }
+            }
+        } else {
+            if (-not $err -and $res) { $st.Info[$j.Arg] = $res[-1] } else { $st.Info[$j.Arg] = @{} }
+            Update-PickInfo
+        }
+        # выбор сменился, пока шла задача, — сведения о новой программе
+        $sel = $c.Results.SelectedItem
+        if (-not $st.Job -and $sel -and -not $st.Info.ContainsKey($sel.Id)) { Start-Job2 'show' $sel.Id }
+    })
+
+    $c.Find.add_Click({ Start-Search })
+    $c.Results.add_SelectionChanged({
+        $it = $c.Results.SelectedItem
+        if (-not $it) { $c.Pick.Visibility = 'Collapsed'; $c.Add.IsEnabled = $false; return }
+        $c.Pick.Visibility = 'Visible'
+        $c.PickName.Text = $it.Name; $c.PickId.Text = $it.Id
+        $c.PickDesc.Text = ''
+        if (-not $c.PickCat.Text) { $c.PickCat.Text = $script:PbUserCategory }
+        $c.Add.IsEnabled = -not $it.IsChecked
+        if (-not $st.Job -and -not $st.Info.ContainsKey($it.Id)) { Start-Job2 'show' $it.Id }
+        Update-PickInfo
+    })
+    $c.Add.add_Click({
+        $it = $c.Results.SelectedItem
+        if (-not $it -or $it.IsChecked) { return }
+        $st.Result = @{ Name = $it.Name; WingetId = $it.Id; Desc = $c.PickDesc.Text.Trim(); Category = $c.PickCat.Text.Trim() }
+        $d.DialogResult = $true
+    })
+    # Enter в поле поиска — «Найти», а не «Добавить»
+    $c.Query.add_GotFocus({ $c.Find.IsDefault = $true })
+    $d.add_ContentRendered({ [void]$c.Query.Focus() })
+    $d.add_Closed({ $timer.Stop(); if ($st.Job) { try { [void]$st.Job.Ps.BeginStop($null, $null) } catch { } } })
+    if (-not $d.ShowDialog()) { return $null }
+    return $st.Result
+}
+
 # ---------- главное окно ----------
 
 function Show-SelectionDialog {
@@ -210,7 +349,9 @@ function Show-SelectionDialog {
     $theme = Initialize-Ui
     $win = New-UiWindow 'main.xaml' $theme
     $ctl = @{}
-    foreach ($n in 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatAll', 'CatNone',
+    foreach ($n in 'TabInstall', 'TabCapture', 'InstallPane', 'InstallBar', 'CapturePane', 'CaptureHint', 'CaptureList', 'CaptureCard', 'CaptureCardIcon',
+        'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
+        'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatAll', 'CatNone',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'RbMineText', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
@@ -238,28 +379,14 @@ function Show-SelectionDialog {
         return $e
     }
 
+    # список программ меняется на лету (собственный каталог), поэтому — ArrayList, а не параметр
+    $appList = New-Object System.Collections.ArrayList
+    foreach ($a in @($Apps)) { [void]$appList.Add($a) }
     [void](Add-Nav 'header' 'apps' 'ПРОГРАММЫ')
     foreach ($grp in ($Apps | Group-Object { $_.Category })) {
         $ck = 'apps|' + $grp.Name
         [void](Add-Nav 'cat' 'apps' $grp.Name $ck)
-        foreach ($a in $grp.Group) {
-            $it = New-Object PcBase.Item
-            $it.Key = 'app:' + $a.Id; $it.Kind = 'app'; $it.Id = $a.Id; $it.Name = $a.Name
-            $it.Desc = $a.Desc; $it.FullDesc = $a.Desc
-            $it.CatKey = $ck; $it.CatName = "Программы · $($grp.Name)"; $it.GroupTitle = $it.CatName
-            $it.Interactive = [bool]$a.Interactive; $it.IsWeb = $a.Source -eq 'web'; $it.OpenSource = [bool]$a.OpenSource
-            $it.HasConfig = [bool]$a.ConfigFn; $it.ConfigName = $a.ConfigName; $it.ConfigDesc = $a.ConfigDesc; $it.ConfigFile = $a.ConfigFile
-            $it.SearchText = @($a.Name, $a.Desc, $a.Id, $a.WingetId, $grp.Name, $a.Note, $(if ($a.OpenSource) { 'open source' })) -join "`n"
-            if ($a.Source -eq 'web') {
-                $it.Facts.Add((New-Fact 'Источник' 'Официальный сайт: актуальная версия, запускается только с действительной подписью издателя'))
-                $it.Facts.Add((New-Fact 'Страница загрузки' $a.PageUrl 'mono'))
-            } else { $it.Facts.Add((New-Fact 'Источник' "winget: $($a.WingetId)" 'mono')) }
-            if ($a.Note) { $it.Facts.Add((New-Fact 'Примечание' $a.Note)) }
-            if ($a.Interactive) { $it.Facts.Add((New-Fact 'Установка' 'Тихая установка невозможна: откроется мастер установки.')) }
-            if ($a.License) { $it.Facts.Add((New-Fact 'Лицензия' $a.License)) }
-            if ($a.Manual) { $it.Facts.Add((New-Fact 'Вручную после установки' $a.Manual)) }
-            $items.Add($it)
-        }
+        foreach ($a in $grp.Group) { $items.Add((New-AppItem $a $ck $grp.Name)) }
     }
 
     [void](Add-Nav 'header' 'tweaks' 'НАСТРОЙКИ WINDOWS')
@@ -295,7 +422,8 @@ function Show-SelectionDialog {
     # WantFiles — файлы из открытого сохранения, которые ещё не в списке (список не пришёл или их нет в релизе)
     $ui = @{ Mode = 'cat'; Cat = $null; Nav = $null; Words = @(); Busy = $false; Bulk = $false; SaveName = $null; Result = $null; Name = $null
              Job = $null; PushAgain = $false; CodeShown = $null
-             Files = 'off'; FilesRepo = $null; FilesError = $null; FilesJob = $null; WantFiles = @() }
+             Files = 'off'; FilesRepo = $null; FilesError = $null; FilesJob = $null; WantFiles = @()
+             Public = $null; Capture = $null; CaptureJob = $null }
     $view = [Windows.Data.CollectionViewSource]::GetDefaultView($items)
     $groupBy = New-Object Windows.Data.PropertyGroupDescription 'GroupTitle'
 
@@ -314,8 +442,8 @@ function Show-SelectionDialog {
         $on = @{}
         foreach ($it in $items) { if ($it.IsChecked) { $on[$it.Key] = $it } }
         return @{
-            Apps     = @($Apps | Where-Object { $on.ContainsKey('app:' + $_.Id) } | ForEach-Object { $_.Id })
-            Configs  = @($Apps | Where-Object { $_.ConfigFn -and $on.ContainsKey('app:' + $_.Id) -and $on['app:' + $_.Id].ConfigOn } | ForEach-Object { $_.Id })
+            Apps     = @($appList | Where-Object { $on.ContainsKey('app:' + $_.Id) } | ForEach-Object { $_.Id })
+            Configs  = @($appList | Where-Object { $_.Config -and $_.Config.Import -and $on.ContainsKey('app:' + $_.Id) -and $on['app:' + $_.Id].ConfigOn } | ForEach-Object { $_.Id })
             Tweaks   = @($Tweaks | Where-Object { $on.ContainsKey('tweak:' + $_.Id) } | ForEach-Object { $_.Id })
             # пока списка нет, файлы из сохранения не теряются: они уйдут и в новое сохранение, и в прогон
             Files    = @(@($items | Where-Object { $_.Kind -eq 'file' -and $_.IsChecked } | ForEach-Object { $_.Id }) + @($ui.WantFiles) | Sort-Object -Unique)
@@ -588,7 +716,7 @@ function Show-SelectionDialog {
             $ok = [bool](Find-PbConfig $it.ConfigFile)
             $it.ConfigAvailable = $ok
             $it.ConfigHint = if ($ok) { '' }
-                elseif ($on) { "В «Моих данных» нет файла configs\$($it.ConfigFile). Настройки снимаются на настроенном компьютере инструментом из папки tools." }
+                elseif ($on) { "В «Моих данных» нет файла configs\$($it.ConfigFile). Настройки снимаются на настроенном компьютере на вкладке «Снятие настроек»." }
                 else { 'Сохранённые настройки недоступны: подключите «Мои данные» (слева внизу).' }
         }
     }
@@ -616,8 +744,8 @@ function Show-SelectionDialog {
                 $ctl.DataBtn.Content = 'Подключить'
                 $ctl.DataBtn.ToolTip = 'Вход в GitHub и подключение приватного репозитория: сохранения и настройки программ на всех компьютерах'
             } else {
-                $tone = if ($st.Pending) { 'Danger' } else { 'AccentText' }
-                $ctl.DataStatus.Text = "подключены$(if ($st.User) { " ($($st.User))" })$(if ($st.Pending) { " · не отправлено: $($st.Pending)" })"
+                $tone = if ($st.Pending -or $ui.Public) { 'Danger' } else { 'AccentText' }
+                $ctl.DataStatus.Text = "$(if ($st.Repo) { $st.Repo } else { 'подключены' })$(if ($ui.Public) { ' · публичный' })$(if ($st.Pending) { " · не отправлено: $($st.Pending)" })"
                 $g = New-Object Windows.Controls.TextBlock
                 $g.Style = $win.FindResource('Glyph'); $g.Text = [string][char]0xE712; $g.FontSize = 14
                 $ctl.DataBtn.Content = $g
@@ -626,6 +754,7 @@ function Show-SelectionDialog {
         }
         $ctl.DataStatus.ToolTip = $ctl.DataStatus.Text
         if ($ui.Files -eq 'off') { Update-FilesCard }
+        if ($ctl.CapturePane.Visibility -eq 'Visible' -and -not (Test-PbDataConnected)) { Update-Capture }
         $ctl.DataIcon.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, $tone)
     }
 
@@ -651,7 +780,10 @@ function Show-SelectionDialog {
     function Complete-DataJob ($Job, $Result, [string]$Err) {
         $ctl.DataLogin.Visibility = 'Collapsed'; $ui.CodeShown = $null
         if ($Job.Action -eq 'push') {
-            if (-not $Err -and @($Result)[-1] -eq $true) { $ctl.NoticeText.Text = $ctl.NoticeText.Text -replace ' Отправка в GitHub…$', ' Отправлено в GitHub.' -replace '^Синхронизация с GitHub…$', '«Мои данные» синхронизированы с GitHub.' }
+            $res = if ($Err) { 'offline' } else { [string](@($Result)[-1]) }
+            $ui.Public = if ($res -eq 'public') { Get-PbDataRepo } else { $null }
+            if ($res -eq 'public') { Show-Notice (Get-PbPublicWarning $ui.Public) 'warn' }
+            elseif ($res -eq 'ok') { $ctl.NoticeText.Text = $ctl.NoticeText.Text -replace ' Отправка в GitHub…$', ' Отправлено в GitHub.' -replace '^Синхронизация с GitHub…$', '«Мои данные» синхронизированы с GitHub.' }
             else { Show-Notice 'Нет связи с GitHub. Изменения сохранены на этом компьютере и будут отправлены при следующем запуске.' 'warn' }
             Update-DataBox
             if ($ui.PushAgain) { $ui.PushAgain = $false; Start-DataJob 'push' }
@@ -663,15 +795,19 @@ function Show-SelectionDialog {
         Start-FilesJob
         $login = @($Result)[-1]
         Show-Notice "«Мои данные» подключены: $login, $($script:PB.DataRoot)."
+        if ($Job.Sync.Public) { $ui.Public = $Job.Sync.Public; Show-Notice (Get-PbPublicWarning $ui.Public) 'warn'; Update-DataBox }
+        # разметка, затем перенос локальных сохранений; отправка — одна, в конце (git занят, пока идёт фоновая задача)
+        $push = Initialize-DataLayout
+        Update-Capture
         $local = @(Get-PbSaves -LocalOnly)
-        if (-not $local.Count) { return }
+        if (-not $local.Count -or (Test-PbDataReadOnly)) { if ($push) { Start-DataJob 'push' }; return }
         $names = ($local | ForEach-Object { "• $($_.Name)" }) -join "`n"
         $ok = Show-UiMessage -Owner $win -Title 'Перенести сохранения?' -Primary 'Перенести' -Secondary 'Оставить' -Lines @(
             "На этом компьютере есть сохранения, созданные без подключения: $($local.Count).", $names,
             @{ Text = 'Сохранения будут перенесены в «Мои данные» и отправлены в GitHub. При совпадении имени к нему добавляется номер.'; Tone = 'muted'; Gap = $true })
-        if (-not $ok) { return }
+        if (-not $ok) { if ($push) { Start-DataJob 'push' }; return }
         try { $n = Move-PbLocalSaves; Show-Notice "Перенесено в «Мои данные»: $n. Отправка в GitHub…"; Start-DataJob 'push' }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось перенести сохранения' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })) }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось перенести сохранения' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); if ($push) { Start-DataJob 'push' } }
     }
 
     $jobTimer.add_Tick({
@@ -795,6 +931,37 @@ function Show-SelectionDialog {
         else { Start-FilesJob }
     })
 
+    # разметка репозитория данных: новый — создать; чужой без манифеста — спросить и добавить недостающее;
+    # старее движка — миграция; новее — только чтение. $true — есть коммит, нужна отправка
+    function Initialize-DataLayout {
+        if (-not (Test-PbDataConnected)) { return $false }
+        $repo = Get-PbDataRepo
+        try {
+            switch (Get-PbDataLayout) {
+                'empty' {
+                    Install-PbDataLayout (Get-PbLayoutPlan -Fresh)
+                    Show-Notice "В репозитории $repo создана разметка Tabula Rasa: README, saves, configs, catalog, .gitignore."
+                    return $true
+                }
+                'foreign' {
+                    $plan = @(Get-PbLayoutPlan)
+                    $ok = Show-UiMessage -Owner $win -Title 'Добавить разметку Tabula Rasa?' -Primary 'Добавить' -Secondary 'Не сейчас' -Lines @(
+                        "В репозитории $repo нет файла tabula-rasa.json, но есть другие файлы. Будет добавлено только недостающее:",
+                        ((Format-PbLayoutPlan $plan | ForEach-Object { "• $_" }) -join "`n"),
+                        @{ Text = 'Существующие файлы и папки не удаляются, не переносятся и не перезаписываются. Изменения фиксируются одним коммитом «Разметка Tabula Rasa».'; Tone = 'muted'; Gap = $true })
+                    if (-not $ok) { return $false }
+                    Install-PbDataLayout $plan
+                    Show-Notice "Разметка Tabula Rasa добавлена в $repo."
+                    return $true
+                }
+                'old' { Update-PbDataLayout; return $true }
+                'new' { Show-Notice 'Разметка «Моих данных» создана более новой версией Tabula Rasa. Изменения в «Моих данных» не сохраняются, пока программа не обновлена.' 'warn' }
+                'broken' { Show-Notice "Файл tabula-rasa.json в репозитории $repo не читается. Исправьте или удалите его, чтобы Tabula Rasa восстановила разметку." 'warn' }
+            }
+        } catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось создать разметку «Моих данных»' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })) }
+        return $false
+    }
+
     function Connect-Data {
         $ok = Show-UiMessage -Owner $win -Title 'Подключить «Мои данные»?' -Primary 'Подключить' -Secondary 'Отмена' -Lines @(
             'Вход в GitHub выполняется в браузере по одноразовому коду.',
@@ -811,11 +978,239 @@ function Show-SelectionDialog {
         $lines += @{ Text = 'Данные на GitHub не удаляются. На другом компьютере их можно подключить снова.'; Tone = 'muted'; Gap = $true }
         if (-not (Show-UiMessage -Owner $win -Title 'Отключить и удалить с этого компьютера?' -Lines $lines -Primary 'Удалить' -Secondary 'Назад' -SafeDefault)) { return }
         $fail = @(Disconnect-PbData)
+        $ui.Public = $null
         Update-ConfigAvail; Update-DataBox
         Set-FileItems 'off'
+        Update-Capture
         if ($ui.SaveName -and -not @(Get-PbSaves | Where-Object { $_.Name -eq $ui.SaveName }).Count) { Set-SaveName $null }
         if ($fail.Count) { Show-Notice ('Удалено не всё: ' + ($fail -join '; ')) 'warn' } else { Show-Notice '«Мои данные» отключены. Данные, вход в GitHub и токены удалены с этого компьютера.' }
     }
+
+    # --- Снятие настроек: программы этого компьютера → временная папка → просмотр изменений → «Мои данные» ---
+    $capItems = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
+    $capTimer = New-Object Windows.Threading.DispatcherTimer
+    $capTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+
+    function Set-CaptureCard ([string]$Title, [string]$Text, [string]$Btn, [int]$Glyph = 0xE946) {
+        $ctl.CaptureCard.Visibility = if ($Title) { 'Visible' } else { 'Collapsed' }
+        $ctl.CaptureList.Visibility = if ($Title) { 'Collapsed' } else { 'Visible' }
+        $ctl.CaptureCardTitle.Text = $Title; $ctl.CaptureCardText.Text = $Text
+        $ctl.CaptureCardIcon.Text = [string][char]$Glyph
+        $ctl.CaptureCardBtn.Content = $Btn
+        $ctl.CaptureCardBtn.Visibility = if ($Btn) { 'Visible' } else { 'Collapsed' }
+    }
+
+    function Update-CaptureSummary {
+        if ($ui.CaptureJob) { return }
+        $n = @($capItems | Where-Object { $_.IsChecked }).Count
+        $ctl.CaptureBtn.IsEnabled = $n -gt 0 -and (Test-PbDataConnected)
+        $ctl.CaptureBtn.Content = if ($n) { "Снять выбранное ($n)" } else { 'Снять выбранное' }
+    }
+
+    # список: только программы, чьи настройки есть на этом компьютере; отметки переживают обновление
+    function Update-Capture {
+        $was = @($capItems | Where-Object { $_.IsChecked } | ForEach-Object { $_.Id })
+        $capItems.Clear()
+        $all = @(Get-PbCaptureApps $appList)
+        $here = @($all | Where-Object { $_.Installed })
+        $miss = @($all | Where-Object { -not $_.Installed } | ForEach-Object { $_.App.Name })
+        $ctl.CaptureHint.Text = "Настройки программ этого компьютера сохраняются в «Моих данных» и применяются на других компьютерах при установке «с моими настройками». Найдено на этом компьютере: $($here.Count) из $($all.Count)." +
+            $(if ($miss.Count) { " Не найдены: $($miss -join ', ')." })
+        if (-not (Test-PbDataConnected)) {
+            Set-CaptureCard 'Подключите «Мои данные», чтобы сохранять настройки' 'Снятые настройки хранятся в приватном репозитории «Моих данных» на GitHub и доступны на всех компьютерах.' $(if ($ui.Job -and $ui.Job.Action -eq 'connect') { '' } else { 'Подключить «Мои данные»' }) 0xE72E
+            Update-CaptureSummary; return
+        }
+        if (Test-PbDataReadOnly) { Set-CaptureCard 'Обновите Tabula Rasa' 'Разметка «Моих данных» создана более новой версией программы. Пока программа не обновлена, настройки не сохраняются.' '' 0xE7BA; Update-CaptureSummary; return }
+        if (-not $here.Count) { Set-CaptureCard 'Нет программ для снятия настроек' 'На этом компьютере не найдены настройки программ, которые поддерживают снятие.' ''; Update-CaptureSummary; return }
+        Set-CaptureCard '' '' ''
+        foreach ($c in $here) {
+            $a = $c.App
+            $it = New-Object PcBase.Item
+            $it.Key = 'cap:' + $a.Id; $it.Kind = 'capture'; $it.Id = $a.Id; $it.Name = $a.Name
+            $it.Facts.Add((New-Fact 'Снимается' $a.Config.Desc))
+            $it.Facts.Add((New-Fact 'Не снимается' "$($a.Config.Skip) Строки и ключи, похожие на пароли, токены и ключи, вырезаются; перед записью показываются изменения."))
+            $it.Facts.Add((New-Fact 'На этом компьютере' (Get-PbConfigSource $a.Config) 'mono'))
+            $rel = 'configs\' + ($a.Config.File -replace '\\.*$', '')
+            $it.Facts.Add((New-Fact 'В «Моих данных»' $rel 'mono'))
+            $last = Get-PbDataLastChange $rel
+            $lastText = if ($last -and $last.Date) { $last.Date.ToLocalTime().ToString('dd.MM.yyyy HH:mm') + $(if ($last.Machine) { ", компьютер $($last.Machine)" }) } else { 'ещё не снимались' }
+            $it.Facts.Add((New-Fact 'Последнее снятие' $lastText))
+            $it.Desc = "$($a.Config.Desc) Последнее снятие: $lastText."
+            $it.IsChecked = $was -contains $a.Id
+            $it.add_PropertyChanged({ Update-CaptureSummary })
+            $capItems.Add($it)
+        }
+        Update-CaptureSummary
+    }
+
+    function Start-Capture {
+        if ($ui.CaptureJob -or (Test-DataBusy)) { return }
+        if (Test-PbDataReadOnly) { Update-Capture; return }
+        $ids = @($capItems | Where-Object { $_.IsChecked } | ForEach-Object { $_.Id })
+        $sel = @($appList | Where-Object { $ids -contains $_.Id })
+        if (-not $sel.Count) { return }
+        $stage = Join-Path $env:TEMP "tabula-rasa\capture\$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({
+            param($Root, $Apps, $Stage)
+            . (Join-Path $Root 'lib\common.ps1'); . (Join-Path $Root 'lib\configs.ps1')
+            Invoke-PbCapture $Apps $Stage
+        })
+        foreach ($a in @($script:PB.Root, $sel, $stage)) { [void]$ps.AddArgument($a) }
+        $ui.CaptureJob = @{ Ps = $ps; Handle = $ps.BeginInvoke(); Stage = $stage }
+        $ctl.CaptureBtn.IsEnabled = $false; $ctl.CaptureBtn.Content = 'Снятие…'
+        $ctl.CaptureSummary.Text = 'Снятие настроек во временную папку…'
+        $capTimer.Start()
+    }
+
+    # что изменится → подтверждение → копия в DataRoot\configs, коммит «Настройки: … (компьютер)», отправка в фоне
+    function Complete-Capture ($Results, [string]$Stage) {
+        $target = Join-Path $script:PB.DataRoot 'configs'
+        $lines = @(); $changed = @(); $names = @()
+        foreach ($r in @($Results)) {
+            if ($r.Error) { $lines += @{ Text = "$($r.Name): $($r.Error)"; Tone = 'danger' }; continue }
+            $ch = @(Compare-PbCapture $Stage $r.Files $target | Where-Object { $_.State -ne 'same' })
+            if (-not $ch.Count) { $lines += "$($r.Name): без изменений"; continue }
+            $names += $r.Name; $changed += @($ch | ForEach-Object { $_.Rel })
+            $lines += @{ Text = $r.Name; Tone = 'strong'; Gap = $true }
+            foreach ($c in @($ch | Select-Object -First 5)) {
+                $lines += "• configs\$($c.Rel): $(if ($c.State -eq 'new') { "новый файл, строк: $($c.Added)" } else { "изменён, +$($c.Added) −$($c.Deleted)" })"
+            }
+            if ($ch.Count -gt 5) { $lines += "• и ещё файлов: $($ch.Count - 5)" }
+            if ($r.Removed.Count) {
+                $lines += @{ Text = "Вырезано как секреты: $($r.Removed.Count) ($(@($r.Removed | Select-Object -First 4) -join ', ')$(if ($r.Removed.Count -gt 4) { ', …' }))."; Tone = 'muted' }
+            }
+        }
+        try {
+            if (-not $changed.Count) {
+                [void](Show-UiMessage -Owner $win -Title 'Изменений нет' -Lines (@($lines) + @{ Text = 'Снятые настройки совпадают с сохранёнными в «Моих данных».'; Tone = 'muted'; Gap = $true }))
+                $ctl.CaptureSummary.Text = 'Изменений нет.'
+                return
+            }
+            $ok = Show-UiMessage -Owner $win -Title 'Сохранить настройки в «Мои данные»?' -Primary 'Сохранить' -Secondary 'Отмена' -Lines (@($lines) +
+                @{ Text = "Изменения будут зафиксированы коммитом «Настройки: $($names -join ', ') ($env:COMPUTERNAME)» и отправлены в GitHub."; Tone = 'muted'; Gap = $true })
+            if (-not $ok) { $ctl.CaptureSummary.Text = 'Снятие отменено, «Мои данные» не изменены.'; return }
+            Copy-PbCapture $Stage $changed $target
+            Save-PbConfigCommit $names
+            $ctl.CaptureSummary.Text = "Сохранено: $($names -join ', '). Отправка в GitHub…"
+            Start-DataJob 'push'
+            Update-ConfigAvail
+        } catch {
+            [void](Show-UiMessage -Owner $win -Title 'Не удалось сохранить настройки' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' }))
+        } finally {
+            Remove-Item $Stage -Recurse -Force -ErrorAction SilentlyContinue
+            Update-Capture
+        }
+    }
+
+    $capTimer.add_Tick({
+        $j = $ui.CaptureJob
+        if (-not $j -or -not $j.Handle.IsCompleted) { return }
+        $capTimer.Stop()
+        $res = $null; $err = $null
+        try { $res = @($j.Ps.EndInvoke($j.Handle) | ForEach-Object { $_.PSObject.BaseObject }) }
+        catch { $err = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message } }
+        $j.Ps.Dispose(); $ui.CaptureJob = $null
+        if ($err) {
+            Remove-Item $j.Stage -Recurse -Force -ErrorAction SilentlyContinue
+            [void](Show-UiMessage -Owner $win -Title 'Не удалось снять настройки' -Lines @(@{ Text = $err; Tone = 'muted' }))
+            Update-Capture; return
+        }
+        Complete-Capture $res $j.Stage
+    })
+
+    $ctl.CaptureList.ItemsSource = $capItems
+    $ctl.CaptureList.add_SelectionChanged({
+        $it = $ctl.CaptureList.SelectedItem
+        $ctl.CaptureDetail.DataContext = $it
+        $ctl.CaptureDetail.Visibility = if ($it) { 'Visible' } else { 'Collapsed' }
+        $ctl.CaptureDetailHint.Visibility = if ($it) { 'Collapsed' } else { 'Visible' }
+    })
+    $ctl.CaptureList.add_PreviewKeyDown({
+        param($s, $e)
+        if ($e.Key -eq 'Space' -and $ctl.CaptureList.SelectedItem) { $ctl.CaptureList.SelectedItem.IsChecked = -not $ctl.CaptureList.SelectedItem.IsChecked; $e.Handled = $true }
+    })
+    $ctl.CaptureBtn.add_Click({ Start-Capture })
+    $ctl.CaptureCardBtn.add_Click({ if (-not $ui.Job -and -not (Test-PbDataConnected)) { Connect-Data } })
+
+    # режим окна: установка или снятие настроек; выбор в одном режиме не сбрасывает другой
+    function Set-WinMode ([string]$Mode) {
+        $cap = $Mode -eq 'capture'
+        $ctl.InstallPane.Visibility = if ($cap) { 'Collapsed' } else { 'Visible' }
+        $ctl.InstallBar.Visibility = if ($cap) { 'Collapsed' } else { 'Visible' }
+        $ctl.CapturePane.Visibility = if ($cap) { 'Visible' } else { 'Collapsed' }
+        foreach ($c in $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn) { $c.Visibility = if ($cap) { 'Hidden' } else { 'Visible' } }
+        if ($cap) { Update-Capture }
+    }
+    $ctl.TabInstall.add_Checked({ Set-WinMode 'install' })
+    $ctl.TabCapture.add_Checked({ Set-WinMode 'capture' })
+
+    # --- собственный каталог: добавить из winget, удалить ---
+    function Get-BuiltinIds { @($appList | Where-Object { -not $_.Mine } | ForEach-Object { $_.Id }) }
+
+    # пункт и, если нужно, новая категория в навигации — перед разделом настроек Windows
+    function Add-AppToView ($A) {
+        $ck = 'apps|' + $A.Category
+        if (-not $cats.Contains($ck)) {
+            $e = New-Object PcBase.NavEntry
+            $e.Kind = 'cat'; $e.Section = 'apps'; $e.Name = $A.Category; $e.Key = $ck
+            $idx = 0
+            for ($i = 0; $i -lt $nav.Count; $i++) { if ($nav[$i].Kind -eq 'header' -and $nav[$i].Section -eq 'tweaks') { $idx = $i; break } }
+            $nav.Insert($idx, $e); $cats[$ck] = $e
+        }
+        $it = New-AppItem $A $ck $A.Category
+        $it.add_PropertyChanged($onChange)
+        $items.Add($it)
+        Update-Counts
+        Select-Nav $cats[$ck]
+        $ctl.List.SelectedItem = $it; $ctl.List.ScrollIntoView($it)
+    }
+
+    function Add-MyApp {
+        if (-not (Test-PbDataConnected)) {
+            $ok = Show-UiMessage -Owner $win -Title 'Подключите «Мои данные»' -Primary 'Подключить' -Secondary 'Отмена' -Lines @(
+                'Собственный каталог программ хранится в «Моих данных» и доступен на всех компьютерах. Чтобы добавлять программы, подключите «Мои данные».')
+            if ($ok -and -not $ui.Job) { Connect-Data }
+            return
+        }
+        if (Test-PbDataReadOnly) { [void](Show-UiMessage -Owner $win -Title 'Обновите Tabula Rasa' -Lines @('Разметка «Моих данных» создана более новой версией программы. Пока программа не обновлена, каталог не изменяется.')); return }
+        if (Test-DataBusy) { return }
+        $known = @{}
+        foreach ($a in $appList) { if ($a.WingetId) { $known[$a.WingetId.ToLower()] = $a.Name } }
+        $catNames = @($appList | ForEach-Object { $_.Category } | Select-Object -Unique)
+        $r = Show-AddAppDialog -Owner $win -Known $known -Categories $catNames
+        if (-not $r) { return }
+        $entry = @{ Id = (New-PbUserAppId $r.WingetId @($appList | ForEach-Object { $_.Id })); Name = $r.Name; Desc = $r.Desc
+                    Category = $(if ($r.Category) { $r.Category } else { $script:PbUserCategory }); Source = 'winget'; WingetId = $r.WingetId }
+        try { Add-PbUserApp $entry (Get-BuiltinIds) }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось добавить программу' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        $entry.Mine = $true
+        [void]$appList.Add($entry)
+        Add-AppToView $entry
+        Show-Notice "Добавлено в собственный каталог: $($entry.Name). Отправка в GitHub…"
+        Start-DataJob 'push'
+    }
+
+    function Remove-MyApp ($It) {
+        if (-not $It -or -not $It.IsMine -or (Test-DataBusy)) { return }
+        if (-not (Show-UiMessage -Owner $win -Title "Удалить «$($It.Name)» из моего каталога?" -Primary 'Удалить' -Secondary 'Назад' -SafeDefault -Lines @(
+            'Программа будет удалена из собственного каталога на всех компьютерах. С этого компьютера программа не удаляется.'))) { return }
+        try { Remove-PbUserApp $It.Id (Get-BuiltinIds) }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось удалить программу из каталога' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        $a = @($appList | Where-Object { $_.Id -eq $It.Id }) | Select-Object -First 1
+        if ($a) { $appList.Remove($a) }
+        $ck = $It.CatKey
+        [void]$items.Remove($It)
+        if (-not @($items | Where-Object { $_.CatKey -eq $ck }).Count -and $cats.Contains($ck)) {
+            [void]$nav.Remove($cats[$ck]); $cats.Remove($ck)
+            if ($ui.Cat -eq $ck) { Select-Nav $first['apps'] }
+        }
+        Update-Counts; Update-View
+        Show-Notice "«$($It.Name)» удалена из собственного каталога. Отправка в GitHub…"
+        Start-DataJob 'push'
+    }
+    $ctl.AddAppBtn.add_Click({ Add-MyApp })
+    $ctl.RemoveMine.add_Click({ Remove-MyApp $ctl.Detail.DataContext })
 
     function Update-OkBtn {
         if ($ctl.ModeApply.IsChecked) {
@@ -948,6 +1343,7 @@ function Show-SelectionDialog {
         $acts = @()
         if ($st.Pending) { $acts += , @("Отправить сейчас (не отправлено: $($st.Pending))", 'push') } else { $acts += , @('Обновить из GitHub', 'push') }
         $acts += , @("Открыть папку $($script:PB.DataRoot)", 'open')
+        if ($st.Repo) { $acts += , @("Открыть репозиторий $($st.Repo) на GitHub", 'web') }
         $acts += , @('Отключить и удалить с этого компьютера…', 'erase')
         foreach ($p in $acts) { $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi) }
         $m.PlacementTarget = $ctl.DataBtn
@@ -958,6 +1354,7 @@ function Show-SelectionDialog {
         switch ([string]$e.Source.Tag) {
             'push'  { Show-Notice 'Синхронизация с GitHub…'; Start-DataJob 'push' }
             'open'  { Start-Process explorer.exe $script:PB.DataRoot }
+            'web'   { $r = Get-PbDataRepo; if ($r) { Start-Process "https://github.com/$r" } }
             'erase' { Disconnect-Data }
         }
     })
@@ -978,7 +1375,7 @@ function Show-SelectionDialog {
     })
     $win.add_Closed({
         if ($ui.Job -and $ui.Job.Sync.Pid) { Stop-Process -Id $ui.Job.Sync.Pid -Force -ErrorAction SilentlyContinue }
-        $filesTimer.Stop()
+        $filesTimer.Stop(); $capTimer.Stop()
         if ($ui.FilesJob) { try { [void]$ui.FilesJob.Ps.BeginStop($null, $null) } catch { } }   # не ждать сеть при закрытии
     })
 
@@ -1026,6 +1423,7 @@ function Show-SelectionDialog {
     $win.add_PreviewKeyDown({
         param($s, $e)
         $ctrl = [Windows.Input.Keyboard]::Modifiers -eq [Windows.Input.ModifierKeys]::Control
+        if ($ctl.TabCapture.IsChecked) { return }   # клавиши каталога — только в режиме «Установка»
         if ($ctrl -and $e.Key -eq 'F') { [void]$ctl.Search.Focus(); $ctl.Search.SelectAll(); $e.Handled = $true; return }
         if ($ctrl -and $e.Key -eq 'S') { $e.Handled = $true; Save-Current; return }
         if ($e.Key -eq 'Escape' -and $ctl.Search.Text) { $ctl.Search.Text = ''; $e.Handled = $true; return }
@@ -1052,7 +1450,11 @@ function Show-SelectionDialog {
     Update-OkBtn
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
     $ctl.Nav.SelectedItem = $start
-    $win.add_ContentRendered({ Select-Nav $ctl.Nav.SelectedItem; Start-FilesJob })
+    $win.add_ContentRendered({
+        Select-Nav $ctl.Nav.SelectedItem
+        Start-FilesJob
+        if (Initialize-DataLayout) { Start-DataJob 'push' }
+    })
 
     if (-not $win.ShowDialog()) { return $null }
 

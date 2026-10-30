@@ -1,40 +1,15 @@
-﻿# Снимает настройки Vivaldi с этого компьютера для Tabula Rasa: только поддерево "vivaldi" из Preferences
-# (интерфейс, панели, вкладки, поведение). Всё, что похоже на аккаунты, почту, синхронизацию,
-# токены и пароли, исключается. Расширения не затрагиваются: они вне этого поддерева.
+﻿# Снимает настройки Vivaldi с этого компьютера: обёртка над Export-VivaldiConfig (lib\configs.ps1) для консоли.
+# То же самое делает вкладка «Снятие настроек» в окне Tabula Rasa: там же просмотр изменений, коммит и отправка.
 #
-#   powershell -ExecutionPolicy Bypass -File export-vivaldi.ps1 [-Out <файл.json>]
-# По умолчанию пишет в свои данные: C:\tabula-rasa-private\configs\vivaldi\prefs.json (или -DataRoot), если они есть
-# на этом компьютере, иначе рядом с собой. В папку движка не пишет никогда: это клон публичного репозитория.
+#   powershell -ExecutionPolicy Bypass -File export-vivaldi.ps1 [-Out <папка configs>] [-DataRoot <Мои данные>]
+# По умолчанию пишет в configs\vivaldi\prefs.json «Моих данных» (C:\tabula-rasa-private), если они есть на этом компьютере,
+# иначе — в configs рядом с собой. В папку движка не пишет: это клон публичного репозитория. Коммит — вручную.
 param([string]$Out, [string]$DataRoot = 'C:\tabula-rasa-private')
 
-$prefs = Join-Path $env:LOCALAPPDATA 'Vivaldi\User Data\Default\Preferences'
-if (-not (Test-Path $prefs)) { Write-Host "Файл $prefs не найден: Vivaldi на этом компьютере не настраивался" -ForegroundColor Red; exit 1 }
-if (-not $Out) {
-    $base = Join-Path $DataRoot 'configs'
-    $Out = if (Test-Path $base) { Join-Path $base 'vivaldi\prefs.json' } else { Join-Path $PSScriptRoot 'vivaldi_prefs.json' }
-}
-
-$deny = 'sync|mail|calendar|account|contact|feed|password|passwd|token|secret|auth|login|oauth|email|cookie|session|credential|private|key$'
-$removed = New-Object System.Collections.ArrayList
-function Remove-Sensitive ($Obj, [string]$Path) {
-    if ($Obj -is [pscustomobject]) {
-        foreach ($p in @($Obj.PSObject.Properties)) {
-            $full = "$Path.$($p.Name)"
-            if ($p.Name -match $deny) { [void]$removed.Add($full); $Obj.PSObject.Properties.Remove($p.Name); continue }
-            Remove-Sensitive $p.Value $full
-        }
-    } elseif ($Obj -is [array]) { foreach ($x in $Obj) { Remove-Sensitive $x $Path } }
-}
-
-$j = Get-Content $prefs -Raw -Encoding UTF8 | ConvertFrom-Json
-if (-not $j.vivaldi) { Write-Host 'В Preferences нет раздела vivaldi' -ForegroundColor Red; exit 1 }
-$v = $j.vivaldi
-Remove-Sensitive $v 'vivaldi'
-
-New-Item -ItemType Directory -Path (Split-Path $Out) -Force | Out-Null
-$json = [pscustomobject]@{ vivaldi = $v } | ConvertTo-Json -Depth 100
-[IO.File]::WriteAllText($Out, $json, (New-Object Text.UTF8Encoding $false))
-
-Write-Host "Готово: $Out ($([math]::Round((Get-Item $Out).Length / 1KB)) КБ)" -ForegroundColor Green
-Write-Host "Разделы: $(@($v.PSObject.Properties.Name) -join ', ')" -ForegroundColor Gray
-if ($removed.Count) { Write-Host "Исключено как конфиденциальное, ключей: $($removed.Count)" -ForegroundColor Yellow; $removed | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkGray } }
+$root = Split-Path $PSScriptRoot
+. (Join-Path $root 'lib\common.ps1'); . (Join-Path $root 'lib\configs.ps1')
+if (-not $Out) { $Out = if (Test-Path (Join-Path $DataRoot 'configs')) { Join-Path $DataRoot 'configs' } else { Join-Path $PSScriptRoot 'configs' } }
+try { $r = Export-VivaldiConfig $Out } catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }
+$file = Join-Path $Out $r.Files[0]
+Write-Host "Готово: $file ($([math]::Round((Get-Item $file).Length / 1KB)) КБ)" -ForegroundColor Green
+if ($r.Removed.Count) { Write-Host "Исключено как конфиденциальное, ключей: $($r.Removed.Count)" -ForegroundColor Yellow; $r.Removed | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkGray } }
