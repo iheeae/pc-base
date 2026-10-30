@@ -1,0 +1,10 @@
+root = false
+
+[*.{ps1,psd1}]
+charset = utf-8-bom
+
+[bootstrap.ps1]
+charset = utf-8
+
+[*.{xaml,cs}]
+charset = utf-8-bom

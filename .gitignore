@@ -1,0 +1,17 @@
+# Логи и бэкапы прогонов
+*.log
+*.bak
+backup_*/
+
+# Секреты
+*.key
+*.pem
+*.pfx
+*.vpn
+*.ovpn
+.env
+secrets/
+
+# Свои настройки программ живут в приватных данных, не в движке
+configs/vivaldi/prefs.json
+tools/vivaldi_prefs.json
