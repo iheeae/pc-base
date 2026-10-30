@@ -4,11 +4,12 @@
 #   powershell -ExecutionPolicy Bypass -File C:\pc-base\setup.ps1
 # Обычно его запускает bootstrap.ps1, руками — для повторного прогона.
 #
-# Две папки: движок — здесь (C:\pc-base, клон публичной репы), свои данные — C:\pc-base-private
-# (клон приватной репы: настройки программ, наборы). Без своих данных работает всё, кроме «с моими настройками».
+# Две папки: движок — здесь (C:\pc-base, клон публичной репы), Мои данные — C:\pc-base-private
+# (клон своей приватной репы: сохранения, настройки программ). Подключаются из окна; без них работает всё,
+# кроме «с моими настройками», а сохранения пишутся локально.
 #
 # Ключи:
-#   -Selection <файл.json>  открыть окно с отмеченным набором (из selections\ своих данных или любой путь)
+#   -Selection <имя|путь>   открыть окно с сохранением: путь к .json, имя из Моих данных или локальных сохранений
 #   -NoPull                 не подтягивать свежую версию из git
 #   -DryRun                 открыть окно в режиме «только показать план» (он и так по умолчанию)
 #   -DataRoot <папка>       где лежат свои данные, если не в C:\pc-base-private
@@ -87,12 +88,11 @@ try {
             & git -C $top pull --ff-only
             if ($LASTEXITCODE -ne 0) { Write-Warn2 'git pull не прошёл — работаю с тем, что есть' }
         }
-        # свои данные — тоже, если они на этом ПК есть и это клон
-        if (Test-Path (Join-Path $script:PB.DataRoot '.git')) {
-            Write-Step "Подтягиваю свои данные ($($script:PB.DataRoot))"
-            & git -C $script:PB.DataRoot pull --ff-only
-            if ($LASTEXITCODE -ne 0) { Write-Warn2 'git pull своих данных не прошёл — работаю с тем, что есть' }
-        }
+    }
+    # Мои данные: подтянуть с GitHub и отправить то, что не ушло в прошлый раз
+    if (-not $NoPull -and (Test-PbDataConnected)) {
+        Write-Step "Мои данные ($($script:PB.DataRoot)): обмен с GitHub"
+        if (-not (Push-PbData)) { Write-Warn2 "нет связи — неотправленное ($((Get-PbDataState).Pending)) уйдёт в следующий раз" }
     }
 
     # ---------- каталог ----------
@@ -109,8 +109,9 @@ try {
     Write-Host '  pc-base' -ForegroundColor Cyan
     Write-Host ("  {0} | Windows {1} (сборка {2}) | {3}{4}" -f $env:COMPUTERNAME, $script:PB.Os, [Environment]::OSVersion.Version.Build,
         $(if ($script:PB.IsDomain) { 'в домене' } else { 'не в домене' }), $(if ($script:PB.IsLaptop) { ' | ноутбук' } else { '' })) -ForegroundColor Gray
-    if (Test-Path $script:PB.DataRoot) { Write-Host "  Свои данные: $($script:PB.DataRoot)" -ForegroundColor Gray }
-    else { Write-Host "  Свои данные не подключены ($($script:PB.DataRoot) нет) — «с моими настройками» недоступно" -ForegroundColor Gray }
+    $ds = Get-PbDataState
+    if ($ds.Connected) { Write-Host "  Мои данные: $($script:PB.DataRoot)$(if ($ds.User) { " ($($ds.User))" })$(if ($ds.Pending) { ", не отправлено: $($ds.Pending)" })" -ForegroundColor Gray }
+    else { Write-Host '  Мои данные не подключены — подключаются в окне, слева внизу' -ForegroundColor Gray }
     if ($DryRun) { Write-Host '  РЕЖИМ ПРОВЕРКИ: ничего не меняется' -ForegroundColor Yellow }
     if (-not (Test-SameUserAsDesktop)) {
         Write-Warn2 "Скрипт запущен от $env:USERNAME, а рабочий стол принадлежит другому пользователю."
@@ -119,17 +120,15 @@ try {
     }
 
     # ---------- окно выбора ----------
-    # наборы галочек — личное: в своих данных, а если их на этом ПК нет — локально в профиле
-    $selDir = if (Test-Path $script:PB.DataRoot) { Join-Path $script:PB.DataRoot 'selections' } else { Join-Path $env:LOCALAPPDATA 'pc-base\selections' }
     $initial = $null
     if ($Selection) {
-        $p = if (Test-Path $Selection) { $Selection } else { Join-Path $selDir (($Selection -replace '\.json$', '') + '.json') }
-        if (Test-Path $p) { $initial = Read-SelectionFile $p } else { Write-Warn2 "Набор не найден: $Selection" }
+        $p = Find-PbSave $Selection
+        if ($p) { $initial = Read-SaveFile $p } else { Write-Warn2 "Сохранение не найдено: $Selection" }
     }
     # файлы pc-base-exe показываем в окне, только если Диск уже виден; иначе — выбор во время прогона
     $driveDir = Find-InstallersDir
     $driveItems = if ($driveDir) { @(Get-DriveItems $driveDir) } else { $null }
-    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -DriveItems $driveItems -Initial $initial -SelDir $selDir -DryRun $true -IsDomain $script:PB.IsDomain
+    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -DriveItems $driveItems -Initial $initial -DryRun $true -IsDomain $script:PB.IsDomain
     if (-not $sel) { Write-Host '  Отменено.'; return }
     $DryRun = $sel.DryRun
     $newName = $sel.Name

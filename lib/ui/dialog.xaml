@@ -12,6 +12,7 @@
         <StackPanel Margin="24,24,24,24">
             <TextBlock x:Name="Head" Style="{StaticResource Title}"/>
             <StackPanel x:Name="Body" Margin="0,8,0,0"/>
+            <TextBox x:Name="Input" Margin="0,16,0,0" Visibility="Collapsed"/>
         </StackPanel>
         <Border Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="24,16">

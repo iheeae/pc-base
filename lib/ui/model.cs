@@ -49,8 +49,14 @@ namespace PcBase
         public bool HasConfig { get; set; }
         // файл настроек нашёлся (в своих данных или в движке); нет — «с моими» не включается
         private bool _cfgAvail = true;
-        public bool ConfigAvailable { get { return _cfgAvail; } set { _cfgAvail = value; if (!value) ConfigOn = false; } }
-        public string ConfigHint { get; set; }   // почему «с моими» недоступно; пусто — доступно
+        public bool ConfigAvailable
+        {
+            get { return _cfgAvail; }
+            set { if (_cfgAvail == value) return; _cfgAvail = value; if (!value) ConfigOn = false; Raise("ConfigAvailable"); }
+        }
+        private string _cfgHint;                 // почему «с моими» недоступно
+        public string ConfigHint { get { return _cfgHint; } set { _cfgHint = value; Raise("ConfigHint"); } }
+        public string ConfigFile { get; set; }   // файл настроек внутри configs\ — чтобы перепроверить после входа
         public string ConfigName { get; set; }
         public string ConfigDesc { get; set; }
         public List<Fact> Facts { get; private set; }
