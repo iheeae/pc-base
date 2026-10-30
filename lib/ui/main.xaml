@@ -77,9 +77,9 @@
                             <TextBlock x:Name="AddAppText" Text="Программа" Margin="8,0,0,0"/>
                         </StackPanel>
                     </Button>
-                    <Button x:Name="SetBtn" Padding="12,0" Margin="0,0,8,0" ToolTip="Сохранённые наборы галочек: открыть, сохранить, переименовать, удалить (Ctrl+S — сохранить)">
+                    <Button x:Name="SetBtn" Padding="12,0" Margin="0,0,8,0" ToolTip="Профили — сохранённые наборы отметок: открыть, сохранить, переименовать, удалить (Ctrl+S — сохранить)">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="SetBtnText" Text="Сохранения" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="SetBtnText" Text="Профили" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
                             <TextBlock Style="{StaticResource Glyph}" Text="&#xE70D;" FontSize="10" Margin="8,0,0,0"/>
                         </StackPanel>
                         <Button.ContextMenu>
@@ -609,6 +609,8 @@
                         <Button x:Name="RunOpenLog" Content="Журналы" Margin="8,0,0,0" ToolTip="Открыть папку журналов выполнения и изменений"/>
                         <Button x:Name="RunOpenReport" Content="Открыть отчёт" Margin="8,0,0,0" ToolTip="Открыть отчёт о прогоне в браузере"/>
                         <Button x:Name="RunOpenFolder" Content="Открыть папку" Margin="8,0,0,0" ToolTip="Открыть папку с отчётами"/>
+                        <Button x:Name="RunSelfRemove" Content="Удалить Tabula Rasa…" Margin="8,0,0,0"
+                                ToolTip="Удалить программу и её данные с этого компьютера. Установленные программы и настройки останутся"/>
                         <Button x:Name="RunReboot" Content="Перезагрузить" Margin="8,0,0,0" ToolTip="Перезагрузить компьютер"/>
                         <Button x:Name="RunApply" Content="Применить…" MinWidth="152" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
                         <Button x:Name="RunClose" Content="Закрыть" MinWidth="120" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
@@ -641,7 +643,7 @@
                 <!-- переключателя «План / Применить» нет: сначала всегда план, применение — кнопкой «Применить…» на экране плана -->
                 <TextBlock x:Name="Summary" Grid.Column="4" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="16,0,16,0"
                            TextTrimming="CharacterEllipsis"/>
-                <Button x:Name="SaveBtn" Grid.Column="5" Content="Сохранить…" Margin="0,0,8,0" ToolTip="Сохранить текущие галочки (Ctrl+S)"/>
+                <Button x:Name="SaveBtn" Grid.Column="5" Content="Сохранить профиль…" Margin="0,0,8,0" ToolTip="Сохранить текущие галочки (Ctrl+S)"/>
                 <Button x:Name="OkBtn" Grid.Column="6" MinWidth="152" IsDefault="False" Content="Показать план" Style="{StaticResource AccentButton}"
                         ToolTip="Показать, что будет сделано. Изменения применяются кнопкой «Применить…» на экране плана после подтверждения"/>
             </Grid>

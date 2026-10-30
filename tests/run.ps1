@@ -541,6 +541,31 @@ try {
     Check 'статус: MSI не через winget, из Microsoft Store, до ответа winget — просто установлено' ($s1.Kind -eq 'installed' -and $s1.Text -eq 'установлено не через winget · 8.6' -and
         $s2.Kind -eq 'installed' -and $s2.Text -eq 'установлено из Microsoft Store · 1.21.2911.0' -and $s3.Text -eq 'установлено · 8.6') @($s1.Text, $s2.Text, $s3.Text)
 
+    # ---------- удаление с компьютера (lib\selfremove.ps1): только свои папки ----------
+    Write-Host 'удаление с компьютера'
+    . (Join-Path (Join-Path $root 'lib') 'selfremove.ps1')
+    $own = Join-Path $tmp 'tabula-rasa-private'; New-Item -ItemType Directory $own -Force | Out-Null
+    & git -C $own init -q 2>$null; & git -C $own remote add origin 'https://github.com/someone/tabula-rasa-private.git' 2>$null
+    $alien = Join-Path $tmp 'alien'; New-Item -ItemType Directory (Join-Path $alien 'tabula-rasa-private') -Force | Out-Null
+    $alienRepo = Join-Path $alien 'tabula-rasa-private'
+    & git -C $alienRepo init -q 2>$null; & git -C $alienRepo remote add origin 'https://github.com/someone/other-repo.git' 2>$null
+    Check 'удаление: только свои папки — не корень, не профиль, не пустой путь' (
+        -not (Test-PbSafeRemovePath '') -and -not (Test-PbSafeRemovePath ([IO.Path]::GetPathRoot($tmp))) -and -not (Test-PbSafeRemovePath $tmp) -and
+        -not (Test-PbSafeRemovePath 'tabula-rasa') -and (Test-PbSafeRemovePath (Join-Path $tmp 'tabula-rasa')) -and (Test-PbSafeRemovePath (Join-Path $tmp 'Tabula Rasa')) -and
+        (Test-PbSafeRemovePath (Join-Path $tmp 'tabula-rasa-files')) -and -not (Test-PbSafeRemovePath (Join-Path $tmp 'tabula-rasa-backup')))
+    Check 'удаление: «Мои данные» — только клон своего tabula-rasa-private' ((Test-PbOwnDataRoot $own) -and -not (Test-PbOwnDataRoot $alienRepo) -and -not (Test-PbOwnDataRoot (Join-Path $tmp 'nope')))
+    $saveRoot = $script:PB.Root; $saveData = $script:PB.DataRoot
+    $script:PB.Root = Join-Path $tmp 'tabula-rasa'; $script:PB.DataRoot = $own
+    $t1 = New-PbSelfRemoveScript @('data', 'git', 'logs', 'files') 4321
+    $t2 = New-PbSelfRemoveScript @() 4321
+    $script:PB.DataRoot = $alienRepo
+    $t3 = New-PbSelfRemoveScript @('data') 4321
+    $script:PB.Root = $saveRoot; $script:PB.DataRoot = $saveData
+    $pe = $null; [void][Management.Automation.Language.Parser]::ParseInput($t1, [ref]$null, [ref]$pe)
+    Check 'удаление: скрипт разбирается; всё выбранное — в нём; ждёт процесс' (-not $pe.Count -and $t1.Contains($own) -and $t1.Contains('Get-Process -Id 4321') -and $t1.Contains('Git.Git')) $pe
+    Check 'удаление: без отметок — только программа, без выхода из GitHub и удаления Git' ($t2 -match 'if \(\$False\) \{\s+if \(Get-Command gh' -and -not $t2.Contains($own) -and $t2.Contains('Get-Process -Id 4321'))
+    Check 'удаление: чужой репозиторий в -DataRoot не удаляется' (-not $t3.Contains($alienRepo))
+
     # ---------- заставка ----------
     Write-Host 'заставка'
     . (Join-Path (Join-Path $root 'lib') 'splash.ps1')

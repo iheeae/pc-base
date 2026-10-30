@@ -101,6 +101,8 @@ lib/catalog.ps1      свой каталог (Read-/Write-PbUserCatalog, Add-/Re
 lib/status.ps1       статус: программы (реестр Uninstall → winget list, ConvertFrom-PbWingetList), твики (Get-PbTweakStatus в common.ps1)
 lib/run.ps1          план и прогон: Get-PbRunPlan (шаги по фазам), Invoke-PbRun ($Sync из окна или консоль), Get-PbChangeLogs, Invoke-PbUndo
 lib/report.ps1       отчёт о прогоне: HTML в «Документы\Tabula Rasa\Отчёты» и в logs (Write-PbReport, Protect-PbReportText)
+lib/selfremove.ps1   удаление с компьютера: Get-PbSelfRemoveParts, скрипт очистки во временной папке (ждёт процесс, удаляет
+                     только свои папки — Test-PbSafeRemovePath, «Мои данные» — Test-PbOwnDataRoot), два подтверждения в окне
 lib/splash.ps1       заставка в своём STA-потоке (Start-/Set-/Close-PbSplash), Show-PbFatal; грузится до остального lib
 lib/files.ps1        «Файлы»: релиз files репозитория данных (Get-PbFiles, Save-PbFiles — загрузка со сверкой SHA-256, ConvertTo-PbAssetName)
 lib/gui.ps1          окно (Show-SelectionDialog: «Установка | Снятие настроек», план/прогон/итог — RunPane), «Добавить программу»,
