@@ -479,7 +479,7 @@ function Set-UiBackdrop ($Win) {
 # размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
 function Get-UiStatePath { Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json' }
 function Read-UiState {
-    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
 }
 function Save-UiState ($Win, [string]$Nav) {
     try {
@@ -600,7 +600,7 @@ function Show-SelectionDialog {
     }
     function Measure-UiText ([string]$T) {
         $ft = New-Object Windows.Media.FormattedText $T, ([Globalization.CultureInfo]::CurrentUICulture), 'LeftToRight',
-            (New-Object Windows.Media.Typeface $win.FontFamily, 'Normal', 'Normal', 'Normal'), 14, [Windows.Media.Brushes]::Black
+            (New-Object Windows.Media.Typeface $win.FontFamily, 'Normal', 'Normal', 'Normal'), 14, ([Windows.Media.Brushes]::Black)
         return $ft.WidthIncludingTrailingWhitespace
     }
     $os = "Windows $($script:PB.Os)"
