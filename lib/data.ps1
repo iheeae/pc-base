@@ -5,8 +5,8 @@
 # нет сети — коммит остаётся локальным, отправится при следующем запуске. Не подключены — сохранения лежат
 # в %LOCALAPPDATA%\tabula-rasa\saves, после подключения их можно перенести.
 #
-# Сохранение — только галочки: Apps, Tweaks, Configs (у кого выбрано «с моими настройками»), Files, FilesAsk
-# плюс Name, Created, Machine, Version. Настройки программ живут отдельно, в DataRoot\configs.
+# Сохранение — только галочки: Apps, Tweaks, Configs (у кого выбрано «с моими настройками»), Files (имена ассетов
+# релиза files, lib\files.ps1) плюс Name, Created, Machine, Version. Настройки программ живут отдельно, в DataRoot\configs.
 
 $script:PbSaveVersion = 1
 $script:PbDataRepoName = 'tabula-rasa-private'
@@ -34,7 +34,7 @@ function ConvertTo-SaveFileName ([string]$Name) {
     return "$n.json"
 }
 
-# читает и новый формат, и старые наборы без Name/Created/Machine
+# читает и новый формат, и старые наборы без Name/Created/Machine; FilesAsk старых сохранений не нужен и пропускается
 function Read-SaveFile ([string]$Path) {
     $j = Get-Content $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     $created = $null
@@ -45,7 +45,6 @@ function Read-SaveFile ([string]$Path) {
         Configs  = @($j.Configs | Where-Object { $_ })
         Tweaks   = @($j.Tweaks | Where-Object { $_ })
         Files    = @($j.Files | Where-Object { $_ })
-        FilesAsk = [bool]$j.FilesAsk
         Name     = $(if ($j.Name) { [string]$j.Name } else { [IO.Path]::GetFileNameWithoutExtension($Path) })
         Created  = $created
         Machine  = [string]$j.Machine
@@ -59,7 +58,7 @@ function Write-SaveFile ([string]$Path, [hashtable]$Sel, [string]$Name, $Created
         Version = $script:PbSaveVersion; Name = $Name
         Created = ([datetime]$Created).ToString('s', [Globalization.CultureInfo]::InvariantCulture); Machine = $Machine
         Apps = @($Sel.Apps); Configs = @($Sel.Configs); Tweaks = @($Sel.Tweaks)
-        Files = @($Sel.Files); FilesAsk = [bool]$Sel.FilesAsk
+        Files = @($Sel.Files)
     } | ConvertTo-Json -Depth 5
     New-Item -ItemType Directory -Path (Split-Path $Path) -Force | Out-Null
     [IO.File]::WriteAllText($Path, $json, (New-Object Text.UTF8Encoding $false))
@@ -153,13 +152,20 @@ function Move-PbLocalSaves {
 
 # ---------- состояние и отправка ----------
 
-# Connected, User (логин GitHub), Pending — сколько коммитов не отправлено
+# <владелец>/<репозиторий> «Моих данных» из origin; не подключены или origin не на GitHub — $null
+function Get-PbDataRepo {
+    if (-not (Test-PbDataConnected)) { return $null }
+    $url = ((Invoke-PbGit remote get-url origin).Out | Select-Object -First 1)
+    if ($url -match 'github\.com[/:]([^/]+/[^/]+?)(\.git)?/?$') { return $Matches[1] }
+    return $null
+}
+
+# Connected, User (логин GitHub), Repo, Pending — сколько коммитов не отправлено
 function Get-PbDataState {
     $st = @{ Connected = (Test-PbDataConnected); User = $null; Pending = 0; Repo = $null }
     if (-not $st.Connected) { return $st }
     $st.User = ((Invoke-PbGit config user.name).Out | Select-Object -First 1)
-    $url = ((Invoke-PbGit remote get-url origin).Out | Select-Object -First 1)
-    if ($url -match 'github\.com[/:]([^/]+/[^/]+?)(\.git)?/?$') { $st.Repo = $Matches[1] }
+    $st.Repo = Get-PbDataRepo
     $r = Invoke-PbGit rev-list --count '@{u}..HEAD'
     if ($r.Code -eq 0) { $st.Pending = [int]($r.Out | Select-Object -First 1) }
     return $st

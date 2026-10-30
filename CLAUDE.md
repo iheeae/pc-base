@@ -26,6 +26,9 @@ Windows и файлов. Название в интерфейсе и текст�
   нет нигде — вариант «с моими настройками» недоступен, прогон не падает.
 - **Мои данные**: git в `DataRoot` — только через `lib/data.ps1`; сеть (push, вход) — только в фоне, окно не ждёт.
   «Отключить и удалить» не трогать без нужды и не тестировать на живом входе — в тестах глушить `gh`, `cmdkey`, глобальный git.
+- **Файлы** — только релиз `files` в репозитории данных текущего пользователя (`Get-PbDataRepo`), никаких захардкоженных
+  владельцев. Имя ассета — ASCII (`ConvertTo-PbAssetName`), исходное имя — в `label`; после загрузки — сверка SHA-256 с `digest`.
+  Google Drive — только в `tools/upload-files.ps1 -FromDrive` (переезд, с Диска только чтение), в движке его нет.
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
   Переезд — `Move-PbLegacyDir` / `Update-PbOrigin` в `setup.ps1` и свой в `bootstrap.ps1`; ничего не удалять.
 
@@ -66,13 +69,14 @@ grep -rniE 'IHEEAE|ilyai|ЛАНИТ|LANIT|ВИСМО|VISMO|Хваев|Khvaev|gma
 bootstrap.ps1        загрузчик: winget, git, переезд C:\pc-base, клон в C:\tabula-rasa (постороннюю копию отодвигает), setup.ps1
 setup.ps1            точка входа: права, переезд старых папок, git pull, синхронизация «Моих данных», окно, прогон, итог
 undo.ps1             откат по журналу изменений (ищет и в старой папке логов)
-lib/common.ps1       $script:PB (Root, DataRoot…), $script:PbLegacy, Find-PbConfig, реестр/службы/задачи с журналом, winget, установка с сайта, Диск
-lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/Remove-PbSave), Мои данные (Connect-/Disconnect-PbData, Push-PbData)
-lib/gui.ps1          окно выбора (Show-SelectionDialog), окно файлов (Show-FilePicker), значок «TR», тема; фоновые задачи — runspace + DispatcherTimer
-lib/ui/              main/files/dialog.xaml, theme.xaml (стили), model.cs (модель для привязок)
+lib/common.ps1       $script:PB (Root, DataRoot…), $script:PbLegacy, Find-PbConfig, реестр/службы/задачи с журналом, winget, установка с сайта
+lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/Remove-PbSave), Мои данные (Connect-/Disconnect-PbData, Push-PbData, Get-PbDataRepo)
+lib/files.ps1        «Файлы»: релиз files репозитория данных (Get-PbFiles, Save-PbFiles — загрузка со сверкой SHA-256, ConvertTo-PbAssetName)
+lib/gui.ps1          окно выбора (Show-SelectionDialog), значок «TR», тема; фоновые задачи — runspace + DispatcherTimer
+lib/ui/              main/dialog.xaml, theme.xaml (стили), model.cs (модель для привязок)
 lib/configs.ps1      перенос настроек программ (функции из поля ConfigFn)
 catalog/apps.psd1    программы       catalog/tweaks.ps1  настройки Windows
 configs/             встроенное по умолчанию (pwsh_profile.ps1) и README с форматом «Моих данных»
-tools/               снятие настроек программ с настроенного компьютера (пишет в «Мои данные», не сюда)
+tools/               снятие настроек программ (пишет в «Мои данные», не сюда); upload-files.ps1 — файлы в релиз files, переезд с Google Drive
 .github/workflows/   pages.yml — bootstrap.ps1 на GitHub Pages: irm iheeae.github.io/tabula-rasa | iex
 ```

@@ -1,23 +1,19 @@
 ﻿# Tabula Rasa: окно выбора на WPF (есть в Windows PowerShell 5.1 из коробки, внешних библиотек нет).
 # Разметка и стили — lib\ui\*.xaml, модель для привязок — lib\ui\model.cs. WPF нужен STA-поток:
 # setup.ps1 перезапускает себя с -STA, если запущен иначе.
-#   * слева навигация: Программы / Настройки Windows / Файлы с Диска по категориям со счётчиками, внизу «Итог»
+#   * слева навигация: Программы / Настройки Windows / Файлы по категориям со счётчиками, внизу «Итог»
 #   * в центре карточки категории; значки ⚙ (есть ConfigFn), мастер, необратимо, сайт видны без клика
 #   * справа подробности выделенного; у программ с ConfigFn — «Установка: с моими настройками / чистая»
 #   * поиск сверху — сразу по всем разделам; «Сохранения ▾» — свои наборы галочек (lib\data.ps1)
 #   * слева внизу «Мои данные»: подключить (вход в GitHub, клон своего приватного репозитория), отправить, отключить и удалить
+#   * «Файлы» — релиз files «Моих данных» (lib\files.ps1): список приходит в фоне; без подключения — карточка с кнопкой
 #   * тема и акцент — как в Windows
 #
-# Возвращает @{ Apps; Configs; Tweaks; Files; FilesAsk; Name; DryRun } или $null, если окно закрыли.
+# Возвращает @{ Apps; Configs; Tweaks; Files; FileTitles; Name; DryRun } или $null, если окно закрыли.
 
 $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 . (Join-Path $PSScriptRoot 'data.ps1')
-
-function Format-Size ([double]$Bytes) {
-    if ($Bytes -ge 1GB) { return '{0:N1} ГБ' -f ($Bytes / 1GB) }
-    if ($Bytes -ge 1MB) { return '{0:N1} МБ' -f ($Bytes / 1MB) }
-    return '{0:N0} КБ' -f ($Bytes / 1KB)
-}
+. (Join-Path $PSScriptRoot 'files.ps1')
 
 # ---------- оформление ----------
 
@@ -180,48 +176,23 @@ function New-Fact ([string]$Label, [string]$Value, [string]$Tone = '') {
     return $f
 }
 
+# файл из релиза files (Get-PbFiles): имя — подпись, id — имя ассета
 function New-FileItem ($File, [string]$CatKey, [string]$Group) {
     $it = New-Object PcBase.Item
-    $it.Key = 'file:' + $File.Name; $it.Kind = 'file'; $it.Id = $File.Name; $it.Name = $File.Name
-    $sz = if ($File.PSIsContainer) { 'папка' } else { Format-Size $File.Length }
-    $dt = $File.LastWriteTime.ToString('dd.MM.yyyy')
-    $it.Desc = "$sz · изменён $dt"
-    $it.FullDesc = 'Файл будет скопирован с Диска в папку «Рабочий стол\pc-base-exe». Установка не выполняется.'
+    $it.Key = 'file:' + $File.Name; $it.Kind = 'file'; $it.Id = $File.Name; $it.Name = $File.Title
+    $sz = Format-PbSize $File.Size
+    $dt = if ($File.Updated) { $File.Updated.ToLocalTime().ToString('dd.MM.yyyy') } else { '' }
+    $it.Desc = $sz + $(if ($dt) { " · загружен $dt" })
+    $it.FullDesc = 'Файл будет загружен в папку «Рабочий стол\tabula-rasa-files» и проверен по контрольной сумме SHA-256. Установка не выполняется: файл запускается вручную.'
     $it.CatKey = $CatKey; $it.CatName = $Group; $it.GroupTitle = $Group
-    $it.SearchText = "$($File.Name)`nдиск`npc-base-exe"
+    $it.SearchText = @($File.Title, $File.Name, 'файлы') -join "`n"
     $it.Facts.Add((New-Fact 'Размер' $sz))
-    $it.Facts.Add((New-Fact 'Изменён' $dt))
-    $it.Facts.Add((New-Fact 'Действие' 'Только копирование'))
+    if ($dt) { $it.Facts.Add((New-Fact 'Загружен в релиз' $dt)) }
+    $it.Facts.Add((New-Fact 'Имя в релизе' $File.Name 'mono'))
+    if ($File.Sha256) { $it.Facts.Add((New-Fact 'SHA-256' $File.Sha256 'mono')) }
+    else { $it.Facts.Add((New-Fact 'SHA-256' 'GitHub не указал контрольную сумму этого файла, поэтому сверка после загрузки не выполняется.' 'danger')) }
+    $it.Facts.Add((New-Fact 'Действие' 'Только загрузка, без установки'))
     return $it
-}
-
-# ---------- окошко файлов с Диска — когда в главном окне Диск ещё не был виден ----------
-
-function Show-FilePicker {
-    param($Items, [string[]]$Preselect)
-    $theme = Initialize-Ui
-    $w = New-UiWindow 'files.xaml' $theme
-    $list = $w.FindName('List'); $sum = $w.FindName('Summary')
-    $rows = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
-    foreach ($i in $Items) {
-        $it = New-FileItem $i 'files' 'pc-base-exe'
-        $it.IsChecked = $Preselect -contains $i.Name
-        $rows.Add($it)
-    }
-    $list.ItemsSource = $rows
-    function Update-Sum { $sum.Text = "Выбрано $(@($rows | Where-Object { $_.IsChecked }).Count) из $($rows.Count)" }
-    foreach ($it in $rows) { $it.add_PropertyChanged({ Update-Sum }) }
-    Update-Sum
-    $w.FindName('All').add_Click({ foreach ($it in $rows) { $it.IsChecked = $true } })
-    $w.FindName('None').add_Click({ foreach ($it in $rows) { $it.IsChecked = $false } })
-    $w.FindName('Ok').add_Click({ $w.DialogResult = $true })
-    $list.add_PreviewKeyDown({
-        param($s, $e)
-        if ($e.Key -eq 'Space' -and $list.SelectedItem) { $list.SelectedItem.IsChecked = -not $list.SelectedItem.IsChecked; $e.Handled = $true }
-    })
-    if (-not $w.ShowDialog()) { return $null }
-    $out = @($rows | Where-Object { $_.IsChecked } | ForEach-Object { $_.Id })
-    return $out
 }
 
 # ---------- главное окно ----------
@@ -229,7 +200,6 @@ function Show-FilePicker {
 function Show-SelectionDialog {
     param(
         $Apps, $Tweaks,
-        $DriveItems,                 # файлы pc-base-exe, если Диск уже виден; $null — не виден
         [hashtable]$Initial,         # сохранение, с которым открыть окно (Read-SaveFile)
         [string[]]$Notices,          # что сказать при открытии (переезд папок и т. п.)
         [bool]$DryRun = $true,
@@ -242,7 +212,8 @@ function Show-SelectionDialog {
     $ctl = @{}
     foreach ($n in 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatAll', 'CatNone',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'RbMineText', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
-        'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen') {
+        'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
+        'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
         $ctl[$n] = $win.FindName($n)
     }
     # 1200×800, но не больше рабочей области (1080p на 150 % — это 1280×~700)
@@ -258,7 +229,7 @@ function Show-SelectionDialog {
     $nav = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
     $cats = [ordered]@{}            # CatKey -> NavEntry
     $first = @{}                    # раздел -> первая категория (Ctrl+1/2/3)
-    $secLabel = @{ apps = 'Программы'; tweaks = 'Настройки Windows'; files = 'Файлы с Google Drive копируются на компьютер без установки' }
+    $secLabel = @{ apps = 'Программы'; tweaks = 'Настройки Windows'; files = 'Файлы из «Моих данных» загружаются на компьютер без установки' }
     function Add-Nav ([string]$Kind, [string]$Section, [string]$Name, [string]$Key) {
         $e = New-Object PcBase.NavEntry
         $e.Kind = $Kind; $e.Section = $Section; $e.Name = $Name; $e.Key = $Key
@@ -308,23 +279,11 @@ function Show-SelectionDialog {
         }
     }
 
-    [void](Add-Nav 'header' 'files' 'ФАЙЛЫ С ДИСКА')
-    $driveOnline = $null -ne $DriveItems
-    $fk = 'files|pc-base-exe'
-    $fileCat = Add-Nav 'cat' 'files' 'pc-base-exe' $fk
-    if ($driveOnline) {
-        foreach ($i in $DriveItems) { $items.Add((New-FileItem $i $fk 'Файлы с Диска · pc-base-exe')) }
-    } else {
-        $secLabel.files = 'Google Drive на этом компьютере не подключён'
-        $it = New-Object PcBase.Item
-        $it.Key = 'files:ask'; $it.Kind = 'ask'; $it.Id = 'ask'; $it.Name = 'Google Drive не подключён'
-        $it.Desc = 'Выбор файлов во время прогона'
-        $it.FullDesc = 'Google Drive на этом компьютере не подключён, поэтому список файлов недоступен. Если отметить этот пункт, во время прогона будет установлен Google Drive, запрошен вход и показан список файлов папки pc-base-exe.'
-        $it.CatKey = $fk; $it.CatName = 'Файлы с Диска · pc-base-exe'; $it.GroupTitle = $it.CatName
-        $it.SearchText = "диск`npc-base-exe`nфайлы`ngoogle drive"
-        $it.Facts.Add((New-Fact 'Действие' 'Файлы копируются в папку «Рабочий стол\pc-base-exe» без установки.'))
-        $items.Add($it)
-    }
+    # файлы: релиз files «Моих данных»; пункты появятся, когда фоновая задача получит список (Start-FilesJob)
+    [void](Add-Nav 'header' 'files' 'ФАЙЛЫ')
+    $fk = 'files|release'
+    $fileGroup = 'Файлы · Мои файлы'
+    [void](Add-Nav 'cat' 'files' 'Мои файлы' $fk)
     $navSummary = New-Object PcBase.NavEntry
     $navSummary.Kind = 'summary'; $navSummary.Name = 'Итог'; $navSummary.Key = 'summary'
     $navBottom = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
@@ -332,8 +291,11 @@ function Show-SelectionDialog {
 
     # --- состояние окна ---
     # Mode: cat — категория слева, search — результаты поиска, summary — экран «Итог»
+    # Files: off — «Мои данные» не подключены, loading, ok, none — нет релиза files, empty, error (FilesError)
+    # WantFiles — файлы из открытого сохранения, которые ещё не в списке (список не пришёл или их нет в релизе)
     $ui = @{ Mode = 'cat'; Cat = $null; Nav = $null; Words = @(); Busy = $false; Bulk = $false; SaveName = $null; Result = $null; Name = $null
-             Job = $null; PushAgain = $false; CodeShown = $null }
+             Job = $null; PushAgain = $false; CodeShown = $null
+             Files = 'off'; FilesRepo = $null; FilesError = $null; FilesJob = $null; WantFiles = @() }
     $view = [Windows.Data.CollectionViewSource]::GetDefaultView($items)
     $groupBy = New-Object Windows.Data.PropertyGroupDescription 'GroupTitle'
 
@@ -355,8 +317,8 @@ function Show-SelectionDialog {
             Apps     = @($Apps | Where-Object { $on.ContainsKey('app:' + $_.Id) } | ForEach-Object { $_.Id })
             Configs  = @($Apps | Where-Object { $_.ConfigFn -and $on.ContainsKey('app:' + $_.Id) -and $on['app:' + $_.Id].ConfigOn } | ForEach-Object { $_.Id })
             Tweaks   = @($Tweaks | Where-Object { $on.ContainsKey('tweak:' + $_.Id) } | ForEach-Object { $_.Id })
-            Files    = @($items | Where-Object { $_.Kind -eq 'file' -and $_.IsChecked } | ForEach-Object { $_.Id } | Sort-Object)
-            FilesAsk = $on.ContainsKey('files:ask')
+            # пока списка нет, файлы из сохранения не теряются: они уйдут и в новое сохранение, и в прогон
+            Files    = @(@($items | Where-Object { $_.Kind -eq 'file' -and $_.IsChecked } | ForEach-Object { $_.Id }) + @($ui.WantFiles) | Sort-Object -Unique)
         }
     }
 
@@ -369,23 +331,17 @@ function Show-SelectionDialog {
         }
         foreach ($k in $cats.Keys) {
             $s = [int]$sel[$k]; $t = [int]$tot[$k]
-            $cats[$k].CountText = "$s/$t"
+            $cats[$k].CountText = if ($t) { "$s/$t" } else { '' }
             $cats[$k].IsFull = $t -gt 0 -and $s -eq $t
-        }
-        if (-not $driveOnline) {
-            $ask = $sel[$fk] -gt 0
-            $fileCat.CountText = if ($ask) { 'при прогоне' } else { '' }
-            $fileCat.IsFull = $ask
         }
         $navSummary.CountText = if ($n) { "$n" } else { '' }
 
         $c = Get-Chosen
         $parts = @("$($c.Apps.Count) $(Get-Plural $c.Apps.Count 'программа' 'программы' 'программ')$(if ($c.Configs.Count) { " (⚙ $($c.Configs.Count))" })",
             "$($c.Tweaks.Count) $(Get-Plural $c.Tweaks.Count 'настройка' 'настройки' 'настроек')")
-        if ($driveOnline) { $parts += "$($c.Files.Count) $(Get-Plural $c.Files.Count 'файл' 'файла' 'файлов')" } elseif ($c.FilesAsk) { $parts += 'файлы при прогоне' }
+        if ($c.Files.Count) { $parts += "$($c.Files.Count) $(Get-Plural $c.Files.Count 'файл' 'файла' 'файлов')" }
         $ctl.Summary.Text = $parts -join ' · '
-        $ctl.Summary.ToolTip = "Выбрано: программ $($c.Apps.Count), из них с моими настройками $($c.Configs.Count); настроек Windows $($c.Tweaks.Count)" +
-            $(if ($driveOnline) { "; файлов с Диска $($c.Files.Count)" } elseif ($c.FilesAsk) { '; файлы с Диска — выбор во время прогона' })
+        $ctl.Summary.ToolTip = "Выбрано: программ $($c.Apps.Count), из них с моими настройками $($c.Configs.Count); настроек Windows $($c.Tweaks.Count); файлов $($c.Files.Count)"
     }
 
     # подсветка категорий с совпадениями, пока идёт поиск
@@ -405,7 +361,8 @@ function Show-SelectionDialog {
         if ($ui.Mode -ne 'cat') { $view.GroupDescriptions.Add($groupBy) }
         $view.Refresh()
         $n = $view.Count
-        $ctl.CatButtons.Visibility = if ($ui.Mode -eq 'cat' -and ($driveOnline -or $ui.Cat -ne $fk)) { 'Visible' } else { 'Collapsed' }
+        $card = $ui.Mode -eq 'cat' -and $ui.Cat -eq $fk -and $ui.Files -ne 'ok'
+        $ctl.CatButtons.Visibility = if ($ui.Mode -eq 'cat' -and -not $card) { 'Visible' } else { 'Collapsed' }
         switch ($ui.Mode) {
             'search' {
                 $ctl.ListTitle.Text = "Поиск: «$($ctl.Search.Text.Trim())»"
@@ -421,10 +378,11 @@ function Show-SelectionDialog {
                 $e = $cats[$ui.Cat]
                 $ctl.ListTitle.Text = $e.Name
                 $ctl.ListHint.Text = $secLabel[$e.Section]
-                $ctl.ListEmpty.Text = if ($e.Section -eq 'files') { 'Папка pc-base-exe на Диске пуста.' } else { 'В этой категории нет пунктов.' }
+                $ctl.ListEmpty.Text = 'В этой категории нет пунктов.'
             }
         }
-        $ctl.ListEmpty.Visibility = if ($n) { 'Collapsed' } else { 'Visible' }
+        $ctl.ListEmpty.Visibility = if ($n -or $card) { 'Collapsed' } else { 'Visible' }
+        $ctl.FilesCard.Visibility = if ($card) { 'Visible' } else { 'Collapsed' }
         if ($n) { $ctl.List.ScrollIntoView($view.GetItemAt(0)) }
     }
 
@@ -463,13 +421,16 @@ function Show-SelectionDialog {
         $known = @{}
         foreach ($it in $items) { $known["$($it.Kind):$($it.Id)"] = $true }
         $miss = @($Sel.Apps | Where-Object { -not $known["app:$_"] }).Count + @($Sel.Tweaks | Where-Object { -not $known["tweak:$_"] }).Count
+        # файлы — по имени ассета или по подписи (так находятся и старые сохранения с именами файлов)
+        $files = @($items | Where-Object { $_.Kind -eq 'file' })
+        $want = @($Sel.Files | Where-Object { $f = $_; -not @($files | Where-Object { $_.Id -eq $f -or $_.Name -eq $f }).Count })
+        if ($ui.Files -eq 'ok') { $miss += $want.Count; $ui.WantFiles = @() } else { $ui.WantFiles = $want }   # список ещё не пришёл
         $ui.Bulk = $true
         foreach ($it in $items) {
             $on = switch ($it.Kind) {
                 'app'   { $Sel.Apps -contains $it.Id }
                 'tweak' { $Sel.Tweaks -contains $it.Id }
-                'file'  { $Sel.Files -contains $it.Id }
-                'ask'   { [bool]($Sel.FilesAsk -or $Sel.Files.Count) }
+                'file'  { $Sel.Files -contains $it.Id -or $Sel.Files -contains $it.Name }
             }
             $it.IsChecked = [bool]$on
             if ($it.HasConfig) { $it.ConfigOn = [bool]$on -and ($Sel.Configs -contains $it.Id) }
@@ -664,6 +625,7 @@ function Show-SelectionDialog {
             }
         }
         $ctl.DataStatus.ToolTip = $ctl.DataStatus.Text
+        if ($ui.Files -eq 'off') { Update-FilesCard }
         $ctl.DataIcon.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, $tone)
     }
 
@@ -698,6 +660,7 @@ function Show-SelectionDialog {
         Update-DataBox
         if ($Err) { [void](Show-UiMessage -Owner $win -Title 'Не удалось подключить «Мои данные»' -Lines @(@{ Text = $Err; Tone = 'muted' })); return }
         Update-ConfigAvail
+        Start-FilesJob
         $login = @($Result)[-1]
         Show-Notice "«Мои данные» подключены: $login, $($script:PB.DataRoot)."
         $local = @(Get-PbSaves -LocalOnly)
@@ -730,6 +693,108 @@ function Show-SelectionDialog {
         Complete-DataJob $j $res $err
     })
 
+    # --- Файлы: список из релиза files в фоне (сеть — только в фоне, окно не ждёт) ---
+    $filesTimer = New-Object Windows.Threading.DispatcherTimer
+    $filesTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+
+    # карточка вместо списка: не подключены, загрузка, нет файлов, ошибка
+    function Update-FilesCard {
+        $btn = $null; $glyph = 0xE8B7
+        switch ($ui.Files) {
+            'off' {
+                $title = 'Подключите «Мои данные»'
+                $text = 'Файлы хранятся в релизе files приватного репозитория «Моих данных» на GitHub. Чтобы увидеть свои файлы, подключите «Мои данные».'
+                $btn = if ($ui.Job -and $ui.Job.Action -eq 'connect') { '' } else { 'Подключить «Мои данные»' }
+                $glyph = 0xE72E
+            }
+            'loading' { $title = 'Загрузка списка файлов…'; $text = "Репозиторий $($ui.FilesRepo)."; $glyph = 0xE895 }
+            'none' {
+                $title = 'Файлов пока нет'
+                $text = "В репозитории $($ui.FilesRepo) нет релиза files. Файлы добавляются на компьютере, где они хранятся: powershell -ExecutionPolicy Bypass -File C:\tabula-rasa\tools\upload-files.ps1 <файлы>"
+                $btn = 'Обновить'
+            }
+            'empty' {
+                $title = 'Файлов пока нет'
+                $text = "Релиз files в репозитории $($ui.FilesRepo) пуст. Файлы добавляются на компьютере, где они хранятся: powershell -ExecutionPolicy Bypass -File C:\tabula-rasa\tools\upload-files.ps1 <файлы>"
+                $btn = 'Обновить'
+            }
+            'error' { $title = 'Не удалось получить список файлов'; $text = $ui.FilesError; $btn = 'Повторить'; $glyph = 0xE7BA }
+            default { $title = ''; $text = '' }
+        }
+        $ctl.FilesCardTitle.Text = $title; $ctl.FilesCardText.Text = $text
+        $ctl.FilesCardIcon.Text = [string][char]$glyph
+        $ctl.FilesCardBtn.Content = $btn
+        $ctl.FilesCardBtn.Visibility = if ($btn) { 'Visible' } else { 'Collapsed' }
+    }
+
+    # заменить пункты-файлы списком из релиза ($List) и перейти в состояние $State
+    function Set-FileItems ([string]$State, $List) {
+        $ui.Files = $State
+        $want = @($ui.WantFiles)
+        foreach ($it in @($items | Where-Object { $_.Kind -eq 'file' })) {
+            if ($it.IsChecked) { $want += $it.Id }   # отмеченное раньше переживает обновление списка
+            [void]$items.Remove($it)
+        }
+        $ui.Bulk = $true
+        foreach ($f in @($List)) {
+            $it = New-FileItem $f $fk $fileGroup
+            $it.IsChecked = ($want -contains $f.Name -or $want -contains $f.Title)
+            $it.add_PropertyChanged($onChange)
+            $items.Add($it)
+        }
+        $ui.Bulk = $false
+        if ($State -eq 'ok' -or $State -eq 'empty' -or $State -eq 'none') {
+            $lost = @($want | Where-Object { $w = $_; -not @($List | Where-Object { $_.Name -eq $w -or $_.Title -eq $w }).Count } | Sort-Object -Unique)
+            $ui.WantFiles = @()
+            if ($lost.Count) { Show-Notice "Файлов из сохранения нет в релизе files, они пропущены: $($lost -join ', ')." 'warn' }
+        } else { $ui.WantFiles = @($want | Sort-Object -Unique) }
+        Update-FilesCard
+        Update-Counts
+        Update-NavHits
+        Update-View
+    }
+
+    function Start-FilesJob {
+        if ($ui.FilesJob) { return }
+        $repo = Get-PbDataRepo
+        if (-not $repo) { Set-FileItems 'off'; return }
+        $ui.FilesRepo = $repo
+        Set-FileItems 'loading'
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({
+            param($Root, $DataRoot, $Repo)
+            . (Join-Path $Root 'lib\common.ps1'); . (Join-Path $Root 'lib\data.ps1'); . (Join-Path $Root 'lib\files.ps1')
+            $script:PB.Root = $Root; $script:PB.DataRoot = $DataRoot
+            Update-PbPath
+            if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GitHub CLI не найден. Подключите «Мои данные» заново: GitHub CLI будет установлен.' }
+            Get-PbFiles $Repo
+        })
+        foreach ($a in @($script:PB.Root, $script:PB.DataRoot, $repo)) { [void]$ps.AddArgument($a) }
+        $ui.FilesJob = @{ Ps = $ps; Handle = $ps.BeginInvoke() }
+        $filesTimer.Start()
+    }
+
+    $filesTimer.add_Tick({
+        $j = $ui.FilesJob
+        if (-not $j -or -not $j.Handle.IsCompleted) { return }
+        $filesTimer.Stop()
+        $res = $null; $err = $null
+        try { $res = @($j.Ps.EndInvoke($j.Handle))[-1]; if ($res) { $res = $res.PSObject.BaseObject } }
+        catch { $err = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message } }
+        $j.Ps.Dispose(); $ui.FilesJob = $null
+        # пока шёл запрос, «Мои данные» могли отключить
+        if (-not (Test-PbDataConnected)) { Set-FileItems 'off'; return }
+        if ($err -or -not $res) { $ui.FilesError = if ($err) { $err } else { 'Пустой ответ GitHub CLI.' }; Set-FileItems 'error'; return }
+        if (-not $res.ReleaseId) { Set-FileItems 'none'; return }
+        if (-not $res.Files.Count) { Set-FileItems 'empty'; return }
+        Set-FileItems 'ok' $res.Files
+    })
+
+    $ctl.FilesCardBtn.add_Click({
+        if ($ui.Files -eq 'off') { if (-not $ui.Job) { Connect-Data } }
+        else { Start-FilesJob }
+    })
+
     function Connect-Data {
         $ok = Show-UiMessage -Owner $win -Title 'Подключить «Мои данные»?' -Primary 'Подключить' -Secondary 'Отмена' -Lines @(
             'Вход в GitHub выполняется в браузере по одноразовому коду.',
@@ -747,6 +812,7 @@ function Show-SelectionDialog {
         if (-not (Show-UiMessage -Owner $win -Title 'Отключить и удалить с этого компьютера?' -Lines $lines -Primary 'Удалить' -Secondary 'Назад' -SafeDefault)) { return }
         $fail = @(Disconnect-PbData)
         Update-ConfigAvail; Update-DataBox
+        Set-FileItems 'off'
         if ($ui.SaveName -and -not @(Get-PbSaves | Where-Object { $_.Name -eq $ui.SaveName }).Count) { Set-SaveName $null }
         if ($fail.Count) { Show-Notice ('Удалено не всё: ' + ($fail -join '; ')) 'warn' } else { Show-Notice '«Мои данные» отключены. Данные, вход в GitHub и токены удалены с этого компьютера.' }
     }
@@ -910,7 +976,11 @@ function Show-SelectionDialog {
         $f = @($e.Data.GetData([Windows.DataFormats]::FileDrop))
         if ($f.Count -eq 1 -and $f[0] -like '*.json') { $e.Handled = $true; Import-Save $f[0] }
     })
-    $win.add_Closed({ if ($ui.Job -and $ui.Job.Sync.Pid) { Stop-Process -Id $ui.Job.Sync.Pid -Force -ErrorAction SilentlyContinue } })
+    $win.add_Closed({
+        if ($ui.Job -and $ui.Job.Sync.Pid) { Stop-Process -Id $ui.Job.Sync.Pid -Force -ErrorAction SilentlyContinue }
+        $filesTimer.Stop()
+        if ($ui.FilesJob) { try { [void]$ui.FilesJob.Ps.BeginStop($null, $null) } catch { } }   # не ждать сеть при закрытии
+    })
 
     # в домене имя не трогаем (Rename-Computer требует доменную учётку) — вместо поля просто текст
     if ($IsDomain) {
@@ -934,7 +1004,7 @@ function Show-SelectionDialog {
             return
         }
         $c = Get-Chosen
-        if (-not $c.Apps.Count -and -not $c.Tweaks.Count -and -not $c.Files.Count -and -not $c.FilesAsk -and -not $name) {
+        if (-not $c.Apps.Count -and -not $c.Tweaks.Count -and -not $c.Files.Count -and -not $name) {
             [void](Show-UiMessage -Owner $win -Title 'Ничего не выбрано' -Lines @('Отметьте хотя бы одну программу, настройку или файл либо укажите новое имя компьютера.'))
             return
         }
@@ -943,7 +1013,7 @@ function Show-SelectionDialog {
             $lines = @("Программ: $($c.Apps.Count)$(if ($c.Configs.Count) { ", из них с моими настройками: $($c.Configs.Count)" })",
                 "Настроек Windows: $($c.Tweaks.Count)")
             if ($irr) { $lines += @{ Text = "Необратимых изменений: $irr. Их можно отменить только точкой восстановления."; Tone = 'danger' } }
-            if ($c.Files.Count) { $lines += "Файлов с Диска: $($c.Files.Count)" } elseif ($c.FilesAsk) { $lines += 'Файлы с Диска: выбрать во время прогона' }
+            if ($c.Files.Count) { $lines += "Файлов: $($c.Files.Count) (загрузка в «Рабочий стол\tabula-rasa-files»)" }
             $lines += if ($name) { "Имя компьютера: $env:COMPUTERNAME → $($name.ToUpper())" } else { "Имя компьютера: $env:COMPUTERNAME (без изменений)" }
             $lines += @{ Text = 'Изменения будут применены сразу. Перед применением создаётся точка восстановления; отмена — undo.ps1.'; Tone = 'muted'; Gap = $true }
             if (-not (Show-UiMessage -Owner $win -Title "Применить к $($env:COMPUTERNAME)?" -Lines $lines -Primary 'Применить' -Secondary 'Назад' -SafeDefault)) { return }
@@ -970,6 +1040,7 @@ function Show-SelectionDialog {
     $ctl.NavBottom.ItemsSource = $navBottom
     $ctl.List.ItemsSource = $items
     Update-ConfigAvail
+    Update-FilesCard
     Update-Counts
     Update-DataBox
     if ($Initial) {
@@ -981,11 +1052,12 @@ function Show-SelectionDialog {
     Update-OkBtn
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
     $ctl.Nav.SelectedItem = $start
-    $win.add_ContentRendered({ Select-Nav $ctl.Nav.SelectedItem })
+    $win.add_ContentRendered({ Select-Nav $ctl.Nav.SelectedItem; Start-FilesJob })
 
     if (-not $win.ShowDialog()) { return $null }
 
     $out = $ui.Result
+    $out.FileTitles = @($out.Files | ForEach-Object { $f = $_; $t = @($items | Where-Object { $_.Kind -eq 'file' -and $_.Id -eq $f } | ForEach-Object { $_.Name }); if ($t) { $t[0] } else { $f } })
     $out.Name = if ($ui.Name) { $ui.Name.ToUpper() } else { $null }
     $out.DryRun = [bool]$ctl.ModePlan.IsChecked
     return $out

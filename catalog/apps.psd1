@@ -4,7 +4,7 @@
 # и ограничений до активации). Исключения: Npcap (бесплатен до 5 систем, без ограничений
 # с Nmap/Wireshark) и Docker Desktop (бесплатен для личного использования и небольших компаний).
 # Бесплатность в описаниях не пишется: в каталоге другого нет. Условия исключений — в поле License.
-# Платное и условно-бесплатное — в папке pc-base-exe на Google Drive, устанавливается вручную.
+# Платное и условно-бесплатное — в разделе «Файлы» (релиз files «Моих данных»), устанавливается вручную.
 #
 # Источники:
 #   Source = 'winget' — WingetId из  winget search <имя>.
@@ -67,6 +67,6 @@
         @{ Id = 'winmerge';  Name = 'WinMerge'; Desc = 'Сравнение и слияние файлов и папок.'; OpenSource = $true; Category = 'Разработка'; Source = 'winget'; WingetId = 'WinMerge.WinMerge' }
         @{ Id = 'angryip';   Name = 'Angry IP Scanner'; Desc = 'Быстрый сканер IP-адресов и портов. Требуется Java.'; OpenSource = $true; Category = 'Сеть и ИБ'; Source = 'winget'; WingetId = 'angryziber.AngryIPScanner'; Note = 'Требуется Java' }
         @{ Id = 'powertoys'; Name = 'PowerToys'; Desc = 'Набор утилит Microsoft: редактор hosts и PATH, распознавание текста с экрана, предпросмотр файлов, переназначение клавиш.'; OpenSource = $true; Category = 'Повседневное'; Source = 'winget'; WingetId = 'Microsoft.PowerToys' }
-        @{ Id = 'gdrive';    Name = 'Google Drive'; Desc = 'Клиент Google Drive. Устанавливается автоматически, если для прогона нужны файлы из папки pc-base-exe.'; Category = 'Повседневное'; Source = 'winget'; WingetId = 'Google.GoogleDrive'; Note = 'Для файлов pc-base-exe устанавливать отдельно не требуется' }
+        @{ Id = 'gdrive';    Name = 'Google Drive'; Desc = 'Клиент Google Drive: файлы Диска доступны в Проводнике как отдельный диск и синхронизируются с облаком.'; Category = 'Повседневное'; Source = 'winget'; WingetId = 'Google.GoogleDrive' }
     )
 }

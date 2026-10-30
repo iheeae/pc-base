@@ -11,8 +11,11 @@ C:\tabula-rasa-private\
   configs\
     pwsh_profile.ps1        собственный профиль PowerShell 7, заменяет встроенный
     vivaldi\prefs.json      настройки Vivaldi для варианта «с моими настройками»
-  saves\*.json              сохранения (Version, Name, Created, Machine, Apps, Tweaks, Configs, Files, FilesAsk)
+  saves\*.json              сохранения (Version, Name, Created, Machine, Apps, Tweaks, Configs, Files)
 ```
+
+Файлы раздела «Файлы» хранятся не в папках репозитория, а ассетами его релиза `files` (`tools/upload-files.ps1`);
+в сохранении поле `Files` содержит имена ассетов.
 
 Tabula Rasa ищет каждый файл сначала в «Моих данных», затем здесь. Если файла нет ни там, ни там, вариант
 «с моими настройками» в окне недоступен (с пояснением), а выполнение продолжается.

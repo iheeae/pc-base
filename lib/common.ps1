@@ -14,9 +14,6 @@ $script:PB = [ordered]@{
     Os                   = $null
     IsDomain             = $false
     IsLaptop             = $false
-    InstallersDir        = $null
-    InstallersAsked      = $false
-    DriveInstalledNow    = $false
 }
 
 # ---------- переезд pc-base → Tabula Rasa ----------
@@ -279,100 +276,6 @@ function Install-WebApp ($App) {
     if ($p.ExitCode -in 3010, 1641) { $script:PB.NeedReboot = $true }
     if (Test-UninstallEntry $App.Detect) { Write-Ok $App.Name; Add-Result $App.Name 'установлено' $file }
     else { Write-Fail "$($App.Name): установщик завершился, но программа не найдена"; Add-Result $App.Name 'ОШИБКА' "код $($p.ExitCode)" }
-}
-
-# ---------- pc-base-exe с Google Drive → рабочий стол ----------
-# Ничего не устанавливается: выбранные файлы из папки pc-base-exe (корень Диска) копируются на рабочий стол,
-# установка — вручную. Список читается с Диска при каждом запуске, новые файлы видны сразу.
-
-$script:DriveRel = 'pc-base-exe'
-
-function Find-InstallersDir {
-    foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-        foreach ($top in @('Мой диск', 'My Drive')) {
-            $p = Join-Path $d.Root (Join-Path $top $script:DriveRel)
-            if (Test-Path $p) { return $p }
-        }
-    }
-    return $null
-}
-
-function Select-FolderDialog ([string]$Title) {
-    Add-Type -AssemblyName System.Windows.Forms
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = $Title
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dlg.SelectedPath }
-    return $null
-}
-
-function Get-InstallersDir {
-    if ($script:PB.InstallersAsked) { return $script:PB.InstallersDir }
-    $script:PB.InstallersAsked = $true
-
-    $dir = Find-InstallersDir
-    while (-not $dir) {
-        Write-Host ''
-        Write-Host '    Нужна папка ' -NoNewline
-        Write-Host $script:DriveRel -ForegroundColor White -NoNewline
-        Write-Host ' с Google Drive'
-        Write-Host '      [1] Установить Google Drive, войти в учётную запись и подключить папку'
-        Write-Host '      [2] Указать папку вручную (флешка, сеть)'
-        Write-Host '      [3] Пропустить'
-        $c = Read-Host '    Выбор'
-        switch ($c) {
-            '1' {
-                if (-not (Test-WingetInstalled 'Google.GoogleDrive')) {
-                    & winget install --id Google.GoogleDrive -e --source winget --silent --accept-package-agreements --accept-source-agreements
-                    $script:PB.DriveInstalledNow = $true
-                }
-                $exe = Get-ChildItem "$env:ProgramFiles\Google\Drive File Stream" -Recurse -Filter GoogleDriveFS.exe -ErrorAction SilentlyContinue |
-                       Sort-Object FullName -Descending | Select-Object -First 1
-                if ($exe) { Start-Process $exe.FullName }
-                Write-Host '    Войдите в учётную запись в окне Google Drive и дождитесь появления диска (обычно G:).' -ForegroundColor Yellow
-                do {
-                    $r = Read-Host '    Enter — проверить, S — пропустить'
-                    $dir = Find-InstallersDir
-                } until ($dir -or $r -match '^[SsЫы]')
-            }
-            '2' { $dir = Select-FolderDialog "Папка $($script:DriveRel)" }
-            '3' { $script:PB.InstallersDir = $null; return $null }
-        }
-    }
-    Write-Ok "источник: $dir"
-    $script:PB.InstallersDir = $dir
-    return $dir
-}
-
-function Get-DriveItems ([string]$Dir) {
-    if (-not $Dir) { return @() }
-    return @(Get-ChildItem -Path $Dir -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'desktop.ini' } | Sort-Object Name)
-}
-
-# $Names — что копировать; $Ask — показать список с галочками (если в окне Диск ещё не был виден)
-function Copy-ExeToDesktop ([string[]]$Names, [switch]$Ask) {
-    $what = "$($script:DriveRel) → рабочий стол"
-    $dir = Get-InstallersDir
-    if (-not $dir) { Write-Skip 'папка не подключена'; Add-Result $what 'пропущено' 'папка не подключена'; return }
-
-    $all = Get-DriveItems $dir
-    if (-not $all.Count) { Write-Warn2 "папка $dir пуста"; Add-Result $what 'пусто'; return }
-    if ($Ask) {
-        $picked = Show-FilePicker -Items $all -Preselect $Names
-        if ($null -eq $picked) { Write-Skip 'выбор отменён'; Add-Result $what 'пропущено' 'отменено'; return }
-        $Names = $picked
-    }
-    $items = @($all | Where-Object { $Names -contains $_.Name })
-    $missing = @($Names | Where-Object { $all.Name -notcontains $_ })
-    foreach ($m in $missing) { Write-Warn2 "на Диске не найдено: $m" }
-    if (-not $items.Count) { Write-Skip 'ничего не выбрано'; Add-Result $what 'пропущено' 'ничего не выбрано'; return }
-
-    $dst = Join-Path ([Environment]::GetFolderPath('Desktop')) $script:DriveRel
-    New-Item -ItemType Directory -Path $dst -Force | Out-Null
-    Write-Host "    копирование файлов ($($items.Count)) в $dst; загрузка с Диска по сети может занять время..." -ForegroundColor Gray
-    foreach ($i in $items) { Copy-Item -Path $i.FullName -Destination $dst -Recurse -Force -ErrorAction Stop; Write-Host "      + $($i.Name)" }
-    Write-Ok "$($items.Count) → $dst"
-    Add-Result $what 'скопировано' "$($items.Count) шт."
-    Add-Manual "Установить вручную файлы из $dst"
 }
 
 function Install-App ($App) {
