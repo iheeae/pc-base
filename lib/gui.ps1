@@ -590,7 +590,7 @@ function Show-SelectionDialog {
     foreach ($n in 'TabInstall', 'TabCapture', 'InstallPane', 'InstallBar', 'CapturePane', 'CaptureHint', 'CaptureList', 'CaptureCard', 'CaptureCardIcon',
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
-        'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
+        'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'TabSwitch', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
         'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'Summary', 'SaveBtn', 'OkBtn',
@@ -1853,6 +1853,9 @@ function Show-SelectionDialog {
         $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run')
                   RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunClose = @('done') }
         foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
+        # журнал — только во время прогона и в итоге; на экране плана он пуст
+        $ctl.LogToggle.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
+        if ($State -eq 'plan') { $ctl.RunLog.Visibility = 'Collapsed'; $ctl.LogToggle.Content = 'Показать журнал' }
         # во время прогона выбор и режимы не трогаются
         foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
     }
@@ -1860,6 +1863,8 @@ function Show-SelectionDialog {
     function Show-Pane ([string]$Which) {
         $run = $Which -eq 'run'
         $ctl.RunPane.Visibility = if ($run) { 'Visible' } else { 'Collapsed' }
+        # «Установка | Снятие настроек» — только при выборе: переключение с экрана плана или прогона ломало окно
+        $ctl.TabSwitch.Visibility = if ($run) { 'Hidden' } else { 'Visible' }
         $ctl.InstallPane.Visibility = if (-not $run -and -not $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
         $ctl.InstallBar.Visibility = $ctl.InstallPane.Visibility
         $ctl.CapturePane.Visibility = if (-not $run -and $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
@@ -2290,6 +2295,12 @@ function Show-SelectionDialog {
                         $env:TR_SMOKE_STEP = 'план'
                         $c = Get-RunChoice
                         if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                        $env:TR_SMOKE_STEP = 'журнал'
+                        $ctl.RunLog.Visibility = 'Visible'
+                        $ctl.RunLog.AppendText(((1..80 | ForEach-Object { "строка журнала $_" }) -join "`r`n"))
+                        $win.UpdateLayout()
+                        if ($ctl.RunLog.ActualHeight -lt 120) { throw "журнал выполнения слишком низкий: $([int]$ctl.RunLog.ActualHeight) px" }
+                        Write-Host "  smoke: журнал $([int]$ctl.RunLog.ActualHeight) px"
                         $env:TR_SMOKE_STEP = 'план показан'
                         return
                     }
