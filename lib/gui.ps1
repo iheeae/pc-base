@@ -19,6 +19,7 @@ $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 . (Join-Path $PSScriptRoot 'catalog.ps1')
 . (Join-Path $PSScriptRoot 'status.ps1')
 . (Join-Path $PSScriptRoot 'run.ps1')
+. (Join-Path $PSScriptRoot 'selfremove.ps1')
 
 # ---------- оформление ----------
 
@@ -512,6 +513,50 @@ function Restore-UiState ($Win, $State) {
     if ($State.Max) { $Win.WindowState = 'Maximized' }
 }
 
+# ---------- «Удалить Tabula Rasa с этого компьютера» (lib\selfremove.ps1) ----------
+# Два подтверждения: список того, что удалится (с отметками), затем «Удалить безвозвратно?» с «Отмена» по умолчанию.
+# $true — удаление запущено, окно нужно закрыть
+function Show-SelfRemoveDialog ($Owner) {
+    $theme = Initialize-Ui
+    $d = New-UiWindow 'dialog.xaml' $theme
+    $d.Owner = $Owner; $d.Width = 600
+    $d.FindName('Head').Text = 'Удалить Tabula Rasa с этого компьютера'
+    $body = $d.FindName('Body'); $bp = $d.FindName('Primary'); $bs = $d.FindName('Secondary')
+    $intro = New-Object Windows.Controls.TextBlock
+    $intro.TextWrapping = 'Wrap'; $intro.Margin = '0,4,0,12'; $intro.LineHeight = 20
+    $intro.Text = 'Программа удалится вместе с отмеченными данными. Всё, что она сделала, останется: установленные программы, применённые настройки Windows и программ.'
+    [void]$body.Children.Add($intro)
+    $boxes = @{}
+    foreach ($p in @(Get-PbSelfRemoveParts)) {
+        $cb = New-Object Windows.Controls.CheckBox
+        $cb.IsChecked = $true; $cb.IsEnabled = -not $p.Fixed; $cb.Margin = '0,8,0,0'
+        $sp = New-Object Windows.Controls.StackPanel
+        $t1 = New-Object Windows.Controls.TextBlock; $t1.Text = $p.Name; $t1.FontWeight = 'SemiBold'; [void]$sp.Children.Add($t1)
+        $t2 = New-Object Windows.Controls.TextBlock; $t2.Text = $p.Desc; $t2.TextWrapping = 'Wrap'; $t2.Margin = '0,2,0,0'
+        $t2.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'TextMuted'); [void]$sp.Children.Add($t2)
+        if (@($p.Paths).Count) {
+            $t3 = New-Object Windows.Controls.TextBlock; $t3.Text = (@($p.Paths) -join "`n"); $t3.TextWrapping = 'Wrap'; $t3.FontFamily = 'Consolas'; $t3.FontSize = 11
+            $t3.Margin = '0,2,0,0'; $t3.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'TextMuted'); [void]$sp.Children.Add($t3)
+        }
+        $cb.Content = $sp
+        [void]$body.Children.Add($cb)
+        $boxes[$p.Key] = $cb
+    }
+    $bp.Content = 'Далее…'; $bs.Content = 'Отмена'; $bs.IsCancel = $true
+    $bp.add_Click({ $d.DialogResult = $true })
+    $d.add_ContentRendered({ [void]$bs.Focus() })
+    if (-not $d.ShowDialog()) { return $false }
+    $keys = @($boxes.Keys | Where-Object { $boxes[$_].IsChecked })
+    $names = @(Get-PbSelfRemoveParts | Where-Object { $keys -contains $_.Key } | ForEach-Object { "• $($_.Name)" })
+    $ok = Show-UiMessage -Owner $Owner -Title 'Удалить Tabula Rasa безвозвратно?' -Primary 'Удалить' -Secondary 'Отмена' -SafeDefault -Lines @(
+        'Будет удалено:', ($names -join "`n"),
+        @{ Text = 'Окно закроется. Удаление завершится через несколько секунд, по окончании появится сообщение. Вернуть удалённое можно только новой установкой Tabula Rasa.'; Tone = 'muted'; Gap = $true })
+    if (-not $ok) { return $false }
+    try { [void](Start-PbSelfRemove $keys) }
+    catch { [void](Show-UiMessage -Owner $Owner -Title 'Не удалось начать удаление' -Lines @(@{ Text = $_.Exception.Message; Tone = 'danger' })); return $false }
+    return $true
+}
+
 # ---------- «Откат изменений»: журналы изменений → Invoke-PbUndo (lib\run.ps1) в фоне ----------
 
 function Show-UndoDialog ($Owner) {
@@ -592,7 +637,7 @@ function Show-SelectionDialog {
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
         'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'TabSwitch', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
-        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
+        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunSelfRemove', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
@@ -943,12 +988,12 @@ function Show-SelectionDialog {
 
     function Set-SaveName ([string]$Name) {
         $ui.SaveName = $Name
-        $ctl.SetBtnText.Text = if ($Name) { $Name } else { 'Сохранения' }
+        $ctl.SetBtnText.Text = if ($Name) { $Name } else { 'Профили' }
     }
 
     function Import-Save ([string]$Path) {
         try { $s = Read-SaveFile $Path }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось открыть сохранение' -Lines @($Path, @{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось открыть профиль' -Lines @($Path, @{ Text = $_.Exception.Message; Tone = 'muted' })); return }
         $miss = Set-Selection $s
         Set-SaveName $s.Name
         $msg = "Открыто «$($s.Name)»"
@@ -969,16 +1014,16 @@ function Show-SelectionDialog {
     function Save-Current {
         if (Test-DataBusy) { return }
         $c = Get-Chosen -ForSave
-        $where = if (Test-PbDataConnected) { "Сохранение будет записано в «Мои данные» ($($script:PB.DataRoot)) и отправлено в GitHub. Оно станет доступно на всех компьютерах." }
-                 else { "Сохранение будет записано на этом компьютере ($(Get-PbLocalSaveDir)). После подключения «Моих данных» его можно перенести." }
+        $where = if (Test-PbDataConnected) { "Профиль будет записан в «Мои данные» ($($script:PB.DataRoot)) и отправлен в GitHub. Он станет доступен на всех компьютерах." }
+                 else { "Профиль будет записан на этом компьютере ($(Get-PbLocalSaveDir)). После подключения «Моих данных» его можно перенести." }
         $def = if ($ui.SaveName) { $ui.SaveName } else { 'Мой набор' }
-        $name = Show-UiMessage -Owner $win -Title 'Сохранить текущее' -WithInput -InputValue $def -Primary 'Сохранить' -Secondary 'Отмена' `
+        $name = Show-UiMessage -Owner $win -Title 'Сохранить профиль' -WithInput -InputValue $def -Primary 'Сохранить' -Secondary 'Отмена' `
             -Lines @("Отмечено: $($ctl.Summary.Text)", @{ Text = $where; Tone = 'muted' })
         if ($null -eq $name) { return }
         $name = $name.Trim()
         if (-not $name) { return }
         if (@(Get-PbSaves | Where-Object { $_.Name -eq $name }).Count -and $name -ne $ui.SaveName) {
-            if (-not (Show-UiMessage -Owner $win -Title "«$name» уже существует" -Lines @('Заменить сохранение текущим выбором?') -Primary 'Заменить' -Secondary 'Назад' -SafeDefault)) { return }
+            if (-not (Show-UiMessage -Owner $win -Title "«$name» уже существует" -Lines @('Заменить профиль текущим выбором?') -Primary 'Заменить' -Secondary 'Назад' -SafeDefault)) { return }
         }
         try { [void](Save-PbSave $name $c) }
         catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось сохранить' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
@@ -1006,7 +1051,7 @@ function Show-SelectionDialog {
         $name = (Read-SaveFile $Path).Name
         $lines = @("Сохранение «$name» будет удалено.")
         if (Test-PbDataConnected) { $lines += @{ Text = 'Сохранение будет удалено и из репозитория на GitHub, но останется в его истории.'; Tone = 'muted' } }
-        if (-not (Show-UiMessage -Owner $win -Title 'Удалить сохранение?' -Lines $lines -Primary 'Удалить' -Secondary 'Назад' -SafeDefault)) { return }
+        if (-not (Show-UiMessage -Owner $win -Title 'Удалить профиль?' -Lines $lines -Primary 'Удалить' -Secondary 'Назад' -SafeDefault)) { return }
         try { Remove-PbSave $Path }
         catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось удалить' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
         if ($ui.SaveName -eq $name) { Set-SaveName $null }
@@ -1040,7 +1085,7 @@ function Show-SelectionDialog {
         $saves = @(Get-PbSaves)
         [void]$m.Items.Add((New-MenuText $(if (Test-PbDataConnected) { 'В МОИХ ДАННЫХ' } else { 'НА ЭТОМ ПК' }) 'SectionLabel'))
         if (-not $saves.Count) {
-            [void]$m.Items.Add((New-MenuText 'Сохранений нет. Чтобы сохранить текущий выбор, используйте «Сохранить текущее…».' 'Muted'))
+            [void]$m.Items.Add((New-MenuText 'Профилей нет. Чтобы сохранить текущий выбор, используйте «Сохранить как профиль…».' 'Muted'))
         }
         foreach ($s in $saves) {
             $mi = New-Object Windows.Controls.MenuItem
@@ -1065,7 +1110,7 @@ function Show-SelectionDialog {
             [void]$m.Items.Add($mi)
         }
         [void]$m.Items.Add((New-Object Windows.Controls.Separator))
-        foreach ($p in @(@('Сохранить текущее…   Ctrl+S', '?save'), @('Открыть файл…', '?open'))) {
+        foreach ($p in @(@('Сохранить как профиль…   Ctrl+S', '?save'), @('Открыть файл…', '?open'))) {
             $mi = New-Object Windows.Controls.MenuItem
             $mi.Header = $p[0]; $mi.Tag = $p[1]
             [void]$m.Items.Add($mi)
@@ -1106,7 +1151,7 @@ function Show-SelectionDialog {
             if (-not $st.Connected) {
                 $ctl.DataStatus.Text = 'не подключены'
                 $ctl.DataBtn.Content = 'Подключить'
-                $ctl.DataBtn.ToolTip = 'Вход в GitHub и подключение приватного репозитория: сохранения и настройки программ на всех компьютерах'
+                $ctl.DataBtn.ToolTip = 'Вход в GitHub и подключение приватного репозитория: профили и настройки программ на всех компьютерах'
             } else {
                 $tone = if ($st.Pending -or $ui.Public) { 'Danger' } else { 'AccentText' }
                 $ctl.DataStatus.Text = "$(if ($st.Repo) { $st.Repo } else { 'подключены' })$(if ($ui.Public) { ' · публичный' })$(if ($st.Pending) { " · не отправлено: $($st.Pending)" })"
@@ -1167,12 +1212,12 @@ function Show-SelectionDialog {
         $local = @(Get-PbSaves -LocalOnly)
         if (-not $local.Count -or (Test-PbDataReadOnly)) { if ($push) { Start-DataJob 'push' }; return }
         $names = ($local | ForEach-Object { "• $($_.Name)" }) -join "`n"
-        $ok = Show-UiMessage -Owner $win -Title 'Перенести сохранения?' -Primary 'Перенести' -Secondary 'Оставить' -Lines @(
-            "На этом компьютере есть сохранения, созданные без подключения: $($local.Count).", $names,
-            @{ Text = 'Сохранения будут перенесены в «Мои данные» и отправлены в GitHub. При совпадении имени к нему добавляется номер.'; Tone = 'muted'; Gap = $true })
+        $ok = Show-UiMessage -Owner $win -Title 'Перенести профили?' -Primary 'Перенести' -Secondary 'Оставить' -Lines @(
+            "На этом компьютере есть профили, созданные без подключения: $($local.Count).", $names,
+            @{ Text = 'Профили будут перенесены в «Мои данные» и отправлены в GitHub. При совпадении имени к нему добавляется номер.'; Tone = 'muted'; Gap = $true })
         if (-not $ok) { if ($push) { Start-DataJob 'push' }; return }
         try { $n = Move-PbLocalSaves; Show-Notice "Перенесено в «Мои данные»: $n. Отправка в GitHub…"; Start-DataJob 'push' }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось перенести сохранения' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); if ($push) { Start-DataJob 'push' } }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось перенести профили' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); if ($push) { Start-DataJob 'push' } }
     }
 
     $jobTimer.add_Tick({
@@ -1248,7 +1293,7 @@ function Show-SelectionDialog {
         if ($State -eq 'ok' -or $State -eq 'empty' -or $State -eq 'none') {
             $lost = @($want | Where-Object { $w = $_; -not @($List | Where-Object { $_.Name -eq $w -or $_.Title -eq $w }).Count } | Sort-Object -Unique)
             $ui.WantFiles = @()
-            if ($lost.Count) { Show-Notice "Файлов из сохранения нет в релизе files, они пропущены: $($lost -join ', ')." 'warn' }
+            if ($lost.Count) { Show-Notice "Файлов из профиля нет в релизе files, они пропущены: $($lost -join ', ')." 'warn' }
         } else { $ui.WantFiles = @($want | Sort-Object -Unique) }
         Update-FilesCard
         Update-Counts
@@ -1331,8 +1376,8 @@ function Show-SelectionDialog {
     function Connect-Data {
         $ok = Show-UiMessage -Owner $win -Title 'Подключить «Мои данные»?' -Primary 'Подключить' -Secondary 'Отмена' -Lines @(
             'Вход в GitHub выполняется в браузере по одноразовому коду.',
-            "Сохранения и настройки программ хранятся в приватном репозитории tabula-rasa-private на GitHub и доступны на всех компьютерах. Если репозитория нет, он будет создан. Локальная копия: $($script:PB.DataRoot).",
-            @{ Text = 'Без подключения доступны все функции, кроме личных сохранений и настроек программ. Чтобы удалить личные данные с компьютера, выберите «Отключить и удалить с этого компьютера».'; Tone = 'muted'; Gap = $true })
+            "Профили и настройки программ хранятся в приватном репозитории tabula-rasa-private на GitHub и доступны на всех компьютерах. Если репозитория нет, он будет создан. Локальная копия: $($script:PB.DataRoot).",
+            @{ Text = 'Без подключения доступны все функции, кроме личных профилей и настроек программ. Чтобы удалить личные данные с компьютера, выберите «Отключить и удалить с этого компьютера».'; Tone = 'muted'; Gap = $true })
         if ($ok) { Start-DataJob 'connect' }
     }
 
@@ -1851,7 +1896,7 @@ function Show-SelectionDialog {
 
     function Set-RunButtons ([string]$State) {
         $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run')
-                  RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunClose = @('done') }
+                  RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunSelfRemove = @('done'); RunClose = @('done') }
         foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
         # журнал — только во время прогона и в итоге; на экране плана он пуст
         $ctl.LogToggle.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
@@ -1865,6 +1910,8 @@ function Show-SelectionDialog {
         $ctl.RunPane.Visibility = if ($run) { 'Visible' } else { 'Collapsed' }
         # «Установка | Снятие настроек» — только при выборе: переключение с экрана плана или прогона ломало окно
         $ctl.TabSwitch.Visibility = if ($run) { 'Hidden' } else { 'Visible' }
+        # поиск, «Программа» и «Профили» к плану и прогону не относятся — на этих экранах их нет
+        foreach ($c in $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn) { $c.Visibility = if ($run) { 'Collapsed' } else { 'Visible' } }
         $ctl.InstallPane.Visibility = if (-not $run -and -not $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
         $ctl.InstallBar.Visibility = $ctl.InstallPane.Visibility
         $ctl.CapturePane.Visibility = if (-not $run -and $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
@@ -2096,6 +2143,15 @@ function Show-SelectionDialog {
         else { $d = Get-PbReportDir; if (-not (Test-Path $d)) { $d = $script:PB.LogDir }; Start-Process explorer.exe "`"$d`"" }
     })
     $ctl.RunClose.add_Click({ $win.DialogResult = $true })
+    # удаление программы: не во время прогона; запущено — окно закрывается, чтобы скрипт очистки мог удалить папку
+    function Invoke-SelfRemove {
+        if ($ui.Run) { [void](Show-UiMessage -Owner $win -Title 'Прогон выполняется' -Lines @('Удалить Tabula Rasa можно после окончания прогона.')); return }
+        if (Show-SelfRemoveDialog $win) {
+            $ui.SelfRemoving = $true
+            $win.DialogResult = $true
+        }
+    }
+    $ctl.RunSelfRemove.add_Click({ Invoke-SelfRemove })
     $ctl.RunReboot.add_Click({
         if (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.')) { Restart-Computer -Force }
     })
@@ -2117,7 +2173,7 @@ function Show-SelectionDialog {
     function Show-Keys {
         [void](Show-UiMessage -Owner $win -Title 'Клавиши' -Lines @(
             'Ctrl+F — поиск, Esc — очистить поиск', 'Ctrl+1 / 2 / 3 — программы, настройки Windows, файлы', '↑ / ↓ — категории, Пробел — отметить пункт',
-            'Ctrl+S — сохранить отметки', 'F1 — этот список'))
+            'Ctrl+S — сохранить профиль', 'F1 — этот список'))
     }
     function Show-About {
         $st = Get-PbDataState
@@ -2131,7 +2187,7 @@ function Show-SelectionDialog {
     $ctl.MoreBtn.add_Click({
         $m = $ctl.MoreBtn.ContextMenu
         $m.Items.Clear()
-        $menu = @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'))
+        $menu = @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'), @('Удалить Tabula Rasa с этого компьютера…', 'remove-self'))
         if ($script:PbThemePref -ne 'auto') { $menu = @(, @('Тема как в Windows', 'theme-auto')) + $menu }
         foreach ($p in $menu) {
             $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
@@ -2143,6 +2199,7 @@ function Show-SelectionDialog {
         switch ([string]$e.Source.Tag) {
             'undo' { Show-UndoDialog $win } 'about' { Show-About } 'keys' { Show-Keys }
             'theme-auto' { $script:PbThemePref = 'auto'; Update-Theme }
+            'remove-self' { Invoke-SelfRemove }
         }
     })
 

@@ -86,11 +86,12 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
 # шаг твика с проверкой до прогона: уже применено — будет пропущено, частично — изменится только отличающееся
 function New-PbTweakStep ([int]$Phase, $T, $Status) {
     $s = New-PbStep $Phase 'tweak' "tweak:$($T.Id)" $T.Name $T.Id
-    $s.Irreversible = [bool]$T.Irreversible
     $st = $null
     if ($Status -and $Status.Tweaks) { $st = $Status.Tweaks[$T.Id] }
     if (-not $st -and (Get-Command Get-PbTweakStatus -ErrorAction SilentlyContinue)) { try { $st = Get-PbTweakStatus $T } catch { $st = 'unknown' } }
     $s.Already = $st
+    # уже применённое необратимое пропускается и ничего не удаляет — не помечать красным и не считать необратимым
+    $s.Irreversible = [bool]$T.Irreversible -and $st -ne 'applied'
     if ($st -eq 'applied') { $s.Note = 'уже применено: будет пропущено' }
     elseif ($st -eq 'partial') { $s.Note = 'применено частично: изменятся только отличающиеся значения' }
     if ($s.Irreversible -and $st -ne 'applied') { $s.Note = (@($s.Note, 'необратимо: отменяется только точкой восстановления') | Where-Object { $_ }) -join '; ' }

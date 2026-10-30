@@ -139,7 +139,7 @@ function Save-PbSave ([string]$Name, [hashtable]$Sel) {
     $dir = Get-PbSaveDir
     $p = Join-Path $dir (ConvertTo-SaveFileName $Name)
     Write-SaveFile $p $Sel $Name
-    if (Test-PbDataConnected) { Save-PbDataCommit "Сохранение: $Name" }
+    if (Test-PbDataConnected) { Save-PbDataCommit "Профиль: $Name" }
     return $p
 }
 
@@ -151,7 +151,7 @@ function Rename-PbSave ([string]$Path, [string]$NewName) {
     Write-SaveFile $np $s $NewName $s.Created $s.Machine
     if ($np -ne $Path) { Remove-Item $Path -Force }
     # локальный файл git не видит: коммит выйдет пустым и пропустится
-    if (Test-PbDataConnected) { Save-PbDataCommit "Сохранение переименовано: $($s.Name) → $NewName" }
+    if (Test-PbDataConnected) { Save-PbDataCommit "Профиль переименован: $($s.Name) → $NewName" }
     return $np
 }
 
@@ -160,7 +160,7 @@ function Remove-PbSave ([string]$Path) {
     $name = [IO.Path]::GetFileNameWithoutExtension($Path)
     try { $name = (Read-SaveFile $Path).Name } catch { }
     Remove-Item $Path -Force
-    if (Test-PbDataConnected) { Save-PbDataCommit "Удалено сохранение: $name" }
+    if (Test-PbDataConnected) { Save-PbDataCommit "Удалён профиль: $name" }
 }
 
 # локальные сохранения → Мои данные одним коммитом. Совпало имя — рядом с номером, ничего не теряется
@@ -174,7 +174,7 @@ function Move-PbLocalSaves {
         $np = Get-FreeSavePath $dir $s.Name
         Move-Item $s.Path $np
     }
-    Save-PbDataCommit "Перенос локальных сохранений с $($env:COMPUTERNAME): $($local.Count)"
+    Save-PbDataCommit "Перенос локальных профилей с $($env:COMPUTERNAME): $($local.Count)"
     return $local.Count
 }
 
@@ -310,7 +310,7 @@ function Get-PbDataReadme {
 
 | Расположение | Содержимое |
 |---|---|
-| `saves/` | сохранения отметок окна (JSON) |
+| `saves/` | профили — сохранённые наборы отметок окна (JSON) |
 | `configs/` | настройки программ, снятые на вкладке «Снятие настроек» |
 | `catalog/apps.psd1` | собственный каталог программ сверх встроенного |
 | релиз `files` | файлы раздела «Файлы» |
