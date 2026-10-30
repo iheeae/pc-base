@@ -1,9 +1,9 @@
 ﻿<!--
-  pc-base: короткое сообщение или подтверждение (Show-UiMessage в lib\gui.ps1). Текст и кнопки — из кода.
+  Tabula Rasa: короткое сообщение или подтверждение (Show-UiMessage в lib\gui.ps1). Текст и кнопки — из кода.
 -->
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="pc-base" Width="440" SizeToContent="Height" ResizeMode="NoResize" ShowInTaskbar="False"
+        Title="Tabula Rasa" Width="440" SizeToContent="Height" ResizeMode="NoResize" ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner" Topmost="True"
         Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}"
         FontFamily="{DynamicResource UiFont}" FontSize="14"

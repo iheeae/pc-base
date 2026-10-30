@@ -1,14 +1,14 @@
-﻿# Снимает настройки Vivaldi с этого ПК для pc-base: только поддерево "vivaldi" из Preferences
+﻿# Снимает настройки Vivaldi с этого компьютера для Tabula Rasa: только поддерево "vivaldi" из Preferences
 # (интерфейс, панели, вкладки, поведение). Всё, что похоже на аккаунты, почту, синхронизацию,
-# токены и пароли, вырезается. Расширения не трогаются — они вне этого поддерева.
+# токены и пароли, исключается. Расширения не затрагиваются: они вне этого поддерева.
 #
 #   powershell -ExecutionPolicy Bypass -File export-vivaldi.ps1 [-Out <файл.json>]
-# По умолчанию пишет в свои данные: C:\pc-base-private\configs\vivaldi\prefs.json (или -DataRoot), если они есть
-# на этом ПК, иначе рядом с собой. В папку движка не пишет никогда: она — клон публичной репы.
-param([string]$Out, [string]$DataRoot = 'C:\pc-base-private')
+# По умолчанию пишет в свои данные: C:\tabula-rasa-private\configs\vivaldi\prefs.json (или -DataRoot), если они есть
+# на этом компьютере, иначе рядом с собой. В папку движка не пишет никогда: это клон публичного репозитория.
+param([string]$Out, [string]$DataRoot = 'C:\tabula-rasa-private')
 
 $prefs = Join-Path $env:LOCALAPPDATA 'Vivaldi\User Data\Default\Preferences'
-if (-not (Test-Path $prefs)) { Write-Host "Нет $prefs — Vivaldi тут не настраивался" -ForegroundColor Red; exit 1 }
+if (-not (Test-Path $prefs)) { Write-Host "Файл $prefs не найден: Vivaldi на этом компьютере не настраивался" -ForegroundColor Red; exit 1 }
 if (-not $Out) {
     $base = Join-Path $DataRoot 'configs'
     $Out = if (Test-Path $base) { Join-Path $base 'vivaldi\prefs.json' } else { Join-Path $PSScriptRoot 'vivaldi_prefs.json' }
@@ -37,4 +37,4 @@ $json = [pscustomobject]@{ vivaldi = $v } | ConvertTo-Json -Depth 100
 
 Write-Host "Готово: $Out ($([math]::Round((Get-Item $Out).Length / 1KB)) КБ)" -ForegroundColor Green
 Write-Host "Разделы: $(@($v.PSObject.Properties.Name) -join ', ')" -ForegroundColor Gray
-if ($removed.Count) { Write-Host "Вырезано как чувствительное: $($removed.Count) ключ(ей)" -ForegroundColor Yellow; $removed | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkGray } }
+if ($removed.Count) { Write-Host "Исключено как конфиденциальное, ключей: $($removed.Count)" -ForegroundColor Yellow; $removed | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkGray } }

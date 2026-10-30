@@ -1,10 +1,10 @@
-﻿# pc-base: общие функции. Подключается из setup.ps1 и undo.ps1 через dot-source.
+﻿# Tabula Rasa: общие функции. Подключается из setup.ps1 и undo.ps1 через dot-source.
 # Совместимо с Windows PowerShell 5.1 (на чистой системе другого нет).
 
 $script:PB = [ordered]@{
-    Root                 = $null                  # движок (клон публичной репы), задаёт setup.ps1
-    DataRoot             = 'C:\pc-base-private'   # свои данные (клон приватной репы), setup.ps1 -DataRoot
-    LogDir               = Join-Path $env:ProgramData 'pc-base\logs'
+    Root                 = $null                  # движок (клон публичного репозитория), задаёт setup.ps1
+    DataRoot             = 'C:\tabula-rasa-private'   # Мои данные (клон приватного репозитория), setup.ps1 -DataRoot
+    LogDir               = Join-Path $env:ProgramData 'tabula-rasa\logs'
     Stamp                = (Get-Date -Format 'yyyy-MM-dd_HHmmss')
     Changes              = New-Object System.Collections.ArrayList
     Results              = New-Object System.Collections.ArrayList
@@ -17,6 +17,40 @@ $script:PB = [ordered]@{
     InstallersDir        = $null
     InstallersAsked      = $false
     DriveInstalledNow    = $false
+}
+
+# ---------- переезд pc-base → Tabula Rasa ----------
+# Старые места до переименования. Папки переезжают на новые (Move-PbLegacyDir), ничего не удаляется.
+$script:PbLegacy = [ordered]@{
+    Root     = 'C:\pc-base'
+    DataRoot = 'C:\pc-base-private'
+    Local    = Join-Path $env:LOCALAPPDATA 'pc-base'
+    Program  = Join-Path $env:ProgramData 'pc-base'
+}
+
+# 'moved' — переехала; 'both' — есть и старая, и новая (не трогаем); 'none' — старой нет;
+# 'busy' — занята дольше $WaitSec (открыт Проводник, терминал): работать со старой
+function Move-PbLegacyDir ([string]$Old, [string]$New, [int]$WaitSec = 60) {
+    if (-not (Test-Path $Old)) { return 'none' }
+    if (Test-Path $New) { return 'both' }
+    $deadline = (Get-Date).AddSeconds($WaitSec); $said = $false
+    while ($true) {
+        try { Move-Item $Old $New -ErrorAction Stop; return 'moved' }
+        catch {
+            if ((Get-Date) -gt $deadline) { return 'busy' }
+            if (-not $said) { Write-Warn2 "папка $Old используется другой программой (Проводник, терминал?); ожидание до $WaitSec с"; $said = $true }
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
+# origin клона со старым именем репозитория → новое, не полагаясь на редирект GitHub
+function Update-PbOrigin ([string]$Dir) {
+    if (-not (Test-Path (Join-Path $Dir '.git'))) { return }
+    $u = & git -C $Dir remote get-url origin 2>$null
+    if (-not $u) { return }
+    $n = $u -replace '/pc-base-private(\.git)?/?$', '/tabula-rasa-private.git' -replace '/pc-base(\.git)?/?$', '/tabula-rasa.git'
+    if ($n -ne $u) { & git -C $Dir remote set-url origin $n 2>$null }
 }
 
 # свой конфиг программы: сначала DataRoot\configs\..., потом встроенный Root\configs\...; нет нигде — $null
@@ -139,7 +173,7 @@ function Disable-Task ([string]$TaskPath, [string]$TaskName) {
     [void]$script:PB.Changes.Add([ordered]@{ Kind = 'Task'; TaskPath = $TaskPath; TaskName = $TaskName; WasEnabled = $wasEnabled })
 }
 
-# Снос UWP у всех пользователей и из образа (чтобы не вернулись у новых профилей). Не откатывается.
+# Удаление UWP у всех пользователей и из образа (чтобы не вернулись у новых профилей). Не откатывается.
 function Remove-Appx ([string[]]$Names) {
     $prov = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
     foreach ($n in $Names) {
@@ -151,7 +185,7 @@ function Remove-Appx ([string[]]$Names) {
         foreach ($p in ($prov | Where-Object { $_.DisplayName -eq $n })) {
             try { Remove-AppxProvisionedPackage -Online -PackageName $p.PackageName -ErrorAction Stop | Out-Null } catch { }
         }
-        if ($pk) { Write-Ok "снесено: $n" }
+        if ($pk) { Write-Ok "удалено: $n" }
     }
 }
 
@@ -168,12 +202,12 @@ function Initialize-Winget {
     Update-SessionPath
     if (Get-Command winget -ErrorAction SilentlyContinue) { return $true }
 
-    Write-Warn2 'winget не найден, пробую зарегистрировать App Installer'
+    Write-Warn2 'winget не найден, регистрация App Installer'
     try { Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop } catch { }
     Update-SessionPath
     if (Get-Command winget -ErrorAction SilentlyContinue) { return $true }
 
-    Write-Warn2 'Ставлю winget через модуль Microsoft.WinGet.Client'
+    Write-Warn2 'Установка winget через модуль Microsoft.WinGet.Client'
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
@@ -181,7 +215,7 @@ function Initialize-Winget {
         Install-Module -Name Microsoft.WinGet.Client -Force -Scope AllUsers -AllowClobber
         Import-Module Microsoft.WinGet.Client -Force
         Repair-WinGetPackageManager -AllUsers -Force -Latest | Out-Null
-    } catch { Write-Fail "winget не поставился: $($_.Exception.Message)"; return $false }
+    } catch { Write-Fail "не удалось установить winget: $($_.Exception.Message)"; return $false }
     Update-SessionPath
     return [bool](Get-Command winget -ErrorAction SilentlyContinue)
 }
@@ -192,19 +226,19 @@ function Test-WingetInstalled ([string]$Id) {
 }
 
 function Install-WingetApp ($App) {
-    if (Test-WingetInstalled $App.WingetId) { Write-Skip "$($App.Name): уже стоит"; Add-Result $App.Name 'уже стоит'; return }
+    if (Test-WingetInstalled $App.WingetId) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
     $a = @('install', '--id', $App.WingetId, '-e', '--source', 'winget',
            '--accept-package-agreements', '--accept-source-agreements')
     if ($App.Interactive) { $a += '--interactive' } else { $a += @('--silent', '--disable-interactivity') }
     if ($App.Scope)    { $a += @('--scope', $App.Scope) }
     if ($App.Override) { $a += @('--override', $App.Override) }
-    Write-Host "    ставлю $($App.Name) ($($App.WingetId))..." -ForegroundColor Gray
+    Write-Host "    установка $($App.Name) ($($App.WingetId))..." -ForegroundColor Gray
     & winget @a
     $code = $LASTEXITCODE
     # 0x8A15002B — обновление не требуется, 0x8A150061 — уже установлен; 3010/1641 — нужна перезагрузка
     if ($code -in 3010, 1641) { $script:PB.NeedReboot = $true }
     if ($code -in 0, 3010, 1641, -1978335189, -1978335135 -or (Test-WingetInstalled $App.WingetId)) {
-        Write-Ok $App.Name; Add-Result $App.Name 'поставлено'
+        Write-Ok $App.Name; Add-Result $App.Name 'установлено'
     } else {
         Write-Fail "$($App.Name): winget вернул $code"; Add-Result $App.Name 'ОШИБКА' "winget exit $code"
     }
@@ -222,34 +256,34 @@ function Test-UninstallEntry ([string]$Like) {
 }
 
 function Install-WebApp ($App) {
-    if (Test-UninstallEntry $App.Detect) { Write-Skip "$($App.Name): уже стоит"; Add-Result $App.Name 'уже стоит'; return }
-    Write-Host "    ищу свежую версию на $($App.PageUrl)..." -ForegroundColor Gray
+    if (Test-UninstallEntry $App.Detect) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
+    Write-Host "    поиск актуальной версии на $($App.PageUrl)..." -ForegroundColor Gray
     $html = (Invoke-WebRequest -Uri $App.PageUrl -UseBasicParsing -ErrorAction Stop).Content
     $found = @([regex]::Matches($html, $App.FileRegex) | ForEach-Object {
         [pscustomobject]@{ File = $_.Value; Ver = [version]($_.Groups['v'].Value + ('.0' * [math]::Max(0, 2 - ($_.Groups['v'].Value.Split('.').Count - 1)))) }
     } | Sort-Object Ver -Descending)
-    if (-not $found) { throw "на странице не нашлось файла по шаблону $($App.FileRegex)" }
+    if (-not $found) { throw "на странице не найден файл по шаблону $($App.FileRegex)" }
     $file = $found[0].File
-    $dir = Join-Path $env:TEMP 'pc-base'; New-Item -ItemType Directory $dir -Force | Out-Null
+    $dir = Join-Path $env:TEMP 'tabula-rasa'; New-Item -ItemType Directory $dir -Force | Out-Null
     $dst = Join-Path $dir $file
-    Write-Host "    качаю $file..." -ForegroundColor Gray
+    Write-Host "    загрузка $file..." -ForegroundColor Gray
     Invoke-WebRequest -Uri ($App.BaseUrl + $file) -OutFile $dst -UseBasicParsing -ErrorAction Stop
     $sig = Get-AuthenticodeSignature $dst
     if ($sig.Status -ne 'Valid' -or ($App.Signer -and $sig.SignerCertificate.Subject -notmatch $App.Signer)) {
         Remove-Item $dst -Force -ErrorAction SilentlyContinue
-        throw "подпись не прошла проверку ($($sig.Status); $($sig.SignerCertificate.Subject)) — файл удалён, не запускаю"
+        throw "цифровая подпись не прошла проверку ($($sig.Status); $($sig.SignerCertificate.Subject)). Файл удалён и не запускался"
     }
-    Write-Ok "подпись в порядке: $($sig.SignerCertificate.Subject -replace ',.*$', '')"
-    if ($App.Interactive) { Write-Host "    откроется установщик $($App.Name) — пройди его руками" -ForegroundColor Yellow }
+    Write-Ok "подпись действительна: $($sig.SignerCertificate.Subject -replace ',.*$', '')"
+    if ($App.Interactive) { Write-Host "    откроется мастер установки $($App.Name), пройдите его вручную" -ForegroundColor Yellow }
     $p = Start-Process -FilePath $dst -Wait -PassThru
     if ($p.ExitCode -in 3010, 1641) { $script:PB.NeedReboot = $true }
-    if (Test-UninstallEntry $App.Detect) { Write-Ok $App.Name; Add-Result $App.Name 'поставлено' $file }
-    else { Write-Fail "$($App.Name): установщик закрылся, а программы нет"; Add-Result $App.Name 'ОШИБКА' "код $($p.ExitCode)" }
+    if (Test-UninstallEntry $App.Detect) { Write-Ok $App.Name; Add-Result $App.Name 'установлено' $file }
+    else { Write-Fail "$($App.Name): установщик завершился, но программа не найдена"; Add-Result $App.Name 'ОШИБКА' "код $($p.ExitCode)" }
 }
 
 # ---------- pc-base-exe с Google Drive → рабочий стол ----------
-# Ничего не ставится: выбранные файлы из папки pc-base-exe (корень Диска) копируются на рабочий стол,
-# дальше ставишь руками. Список читается с Диска при каждом запуске — докинул файл, он сразу виден.
+# Ничего не устанавливается: выбранные файлы из папки pc-base-exe (корень Диска) копируются на рабочий стол,
+# установка — вручную. Список читается с Диска при каждом запуске, новые файлы видны сразу.
 
 $script:DriveRel = 'pc-base-exe'
 
@@ -281,7 +315,7 @@ function Get-InstallersDir {
         Write-Host '    Нужна папка ' -NoNewline
         Write-Host $script:DriveRel -ForegroundColor White -NoNewline
         Write-Host ' с Google Drive'
-        Write-Host '      [1] Поставить Google Drive, войти в аккаунт и подцепить папку'
+        Write-Host '      [1] Установить Google Drive, войти в учётную запись и подключить папку'
         Write-Host '      [2] Указать папку вручную (флешка, сеть)'
         Write-Host '      [3] Пропустить'
         $c = Read-Host '    Выбор'
@@ -294,9 +328,9 @@ function Get-InstallersDir {
                 $exe = Get-ChildItem "$env:ProgramFiles\Google\Drive File Stream" -Recurse -Filter GoogleDriveFS.exe -ErrorAction SilentlyContinue |
                        Sort-Object FullName -Descending | Select-Object -First 1
                 if ($exe) { Start-Process $exe.FullName }
-                Write-Host '    Войди в аккаунт в окне Google Drive и подожди, пока появится диск (обычно G:).' -ForegroundColor Yellow
+                Write-Host '    Войдите в учётную запись в окне Google Drive и дождитесь появления диска (обычно G:).' -ForegroundColor Yellow
                 do {
-                    $r = Read-Host '    Enter — проверить, S — сдаться'
+                    $r = Read-Host '    Enter — проверить, S — пропустить'
                     $dir = Find-InstallersDir
                 } until ($dir -or $r -match '^[SsЫы]')
             }
@@ -321,7 +355,7 @@ function Copy-ExeToDesktop ([string[]]$Names, [switch]$Ask) {
     if (-not $dir) { Write-Skip 'папка не подключена'; Add-Result $what 'пропущено' 'папка не подключена'; return }
 
     $all = Get-DriveItems $dir
-    if (-not $all.Count) { Write-Warn2 "$dir пустая"; Add-Result $what 'пусто'; return }
+    if (-not $all.Count) { Write-Warn2 "папка $dir пуста"; Add-Result $what 'пусто'; return }
     if ($Ask) {
         $picked = Show-FilePicker -Items $all -Preselect $Names
         if ($null -eq $picked) { Write-Skip 'выбор отменён'; Add-Result $what 'пропущено' 'отменено'; return }
@@ -329,16 +363,16 @@ function Copy-ExeToDesktop ([string[]]$Names, [switch]$Ask) {
     }
     $items = @($all | Where-Object { $Names -contains $_.Name })
     $missing = @($Names | Where-Object { $all.Name -notcontains $_ })
-    foreach ($m in $missing) { Write-Warn2 "на Диске больше нет: $m" }
+    foreach ($m in $missing) { Write-Warn2 "на Диске не найдено: $m" }
     if (-not $items.Count) { Write-Skip 'ничего не выбрано'; Add-Result $what 'пропущено' 'ничего не выбрано'; return }
 
     $dst = Join-Path ([Environment]::GetFolderPath('Desktop')) $script:DriveRel
     New-Item -ItemType Directory -Path $dst -Force | Out-Null
-    Write-Host "    качаю $($items.Count) шт. в $dst (с Диска тянется по сети, может занять время)..." -ForegroundColor Gray
+    Write-Host "    копирование файлов ($($items.Count)) в $dst; загрузка с Диска по сети может занять время..." -ForegroundColor Gray
     foreach ($i in $items) { Copy-Item -Path $i.FullName -Destination $dst -Recurse -Force -ErrorAction Stop; Write-Host "      + $($i.Name)" }
     Write-Ok "$($items.Count) → $dst"
     Add-Result $what 'скопировано' "$($items.Count) шт."
-    Add-Manual "Поставить руками из $dst"
+    Add-Manual "Установить вручную файлы из $dst"
 }
 
 function Install-App ($App) {
@@ -346,7 +380,7 @@ function Install-App ($App) {
         switch ($App.Source) {
             'winget' { Install-WingetApp $App }
             'web'    { Install-WebApp $App }
-            default  { Write-Warn2 "$($App.Name): неизвестный источник '$($App.Source)'"; Add-Result $App.Name 'пропущено' 'источник?'; return }
+            default  { Write-Warn2 "$($App.Name): неизвестный источник '$($App.Source)'"; Add-Result $App.Name 'пропущено' 'неизвестный источник'; return }
         }
         if ($App.Manual) { Add-Manual "$($App.Name): $($App.Manual)" }
     } catch {

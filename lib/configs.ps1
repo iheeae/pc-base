@@ -1,4 +1,4 @@
-﻿# pc-base: перенос настроек программ (галочка «с моими настройками» под программой в окне).
+﻿# Tabula Rasa: перенос настроек программ (галочка «с моими настройками» под программой в окне).
 # Каждая функция здесь указывается в каталоге полем ConfigFn, файл данных — полем ConfigFile.
 # Данные лежат в configs\<программа>\ своих данных (DataRoot) или движка (Root), ищет их Find-PbConfig.
 # Снимаются они инструментами из tools\ на уже настроенном ПК.
@@ -17,13 +17,13 @@ function Set-VivaldiConfig {
     $what = 'Vivaldi: мои настройки'
     $src = Find-PbConfig 'vivaldi\prefs.json'
     if (-not $src) {
-        Write-Warn2 "нет configs\vivaldi\prefs.json ни в $($script:PB.DataRoot), ни в движке — Vivaldi остаётся чистым"
-        Add-Result $what 'пропущено' 'нет configs\vivaldi\prefs.json'
-        Add-Manual 'Vivaldi: снять свои настройки через tools\export-vivaldi.ps1 на настроенном ПК и положить в свои данные'
+        Write-Warn2 "файл configs\vivaldi\prefs.json не найден ни в $($script:PB.DataRoot), ни во встроенных настройках; Vivaldi установлен без них"
+        Add-Result $what 'пропущено' 'нет файла configs\vivaldi\prefs.json'
+        Add-Manual 'Vivaldi: снять настройки на настроенном компьютере (tools\export-vivaldi.ps1) и сохранить в «Моих данных»'
         return
     }
     if (Get-Process vivaldi -ErrorAction SilentlyContinue) {
-        Write-Warn2 'Vivaldi запущен — закрываю, иначе он перезапишет настройки при выходе'
+        Write-Warn2 'Vivaldi запущен и будет закрыт, иначе он перезапишет настройки при выходе'
         Get-Process vivaldi -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Seconds 2
     }
@@ -32,12 +32,12 @@ function Set-VivaldiConfig {
     $file = Join-Path $dir 'Preferences'
     $saved = Get-Content $src -Raw -Encoding UTF8 | ConvertFrom-Json
     if (Test-Path $file) {
-        Copy-Item $file "$file.pc-base_$($script:PB.Stamp).bak" -Force
+        Copy-Item $file "$file.tabula-rasa_$($script:PB.Stamp).bak" -Force
         $cur = Get-Content $file -Raw -Encoding UTF8 | ConvertFrom-Json
     } else { $cur = [pscustomobject]@{} }
     Merge-JsonObject $cur $saved
     [IO.File]::WriteAllText($file, ($cur | ConvertTo-Json -Depth 100 -Compress), (New-Object Text.UTF8Encoding $false))
-    Write-Ok "Vivaldi: настройки влиты в $file"
+    Write-Ok "Vivaldi: настройки применены ($file)"
     Add-Result $what 'применено'
-    Add-Manual 'Vivaldi: при первом запуске проверить, что интерфейс подхватился; для закладок и паролей войти в Vivaldi Sync'
+    Add-Manual 'Vivaldi: при первом запуске проверить применение настроек интерфейса; для закладок и паролей войти в Vivaldi Sync'
 }
