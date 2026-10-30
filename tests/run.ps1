@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
-foreach ($f in 'common', 'data', 'files', 'catalog', 'configs') { . (Join-Path (Join-Path $root 'lib') "$f.ps1") }
+foreach ($f in 'common', 'data', 'files', 'catalog', 'configs', 'status', 'run') { . (Join-Path (Join-Path $root 'lib') "$f.ps1") }
 $script:PB.Root = $root
 
 $script:Fails = 0; $script:Count = 0
@@ -280,6 +280,106 @@ try {
     $first = & $ps -NoProfile -Command $probe
     $second = & $ps -NoProfile -Command $probe
     Check 'model.cs: собран в кеш один раз и загружается из него' ($first -like "$mc*" -and $second -eq $first -and @(Get-ChildItem $mc -Filter *.dll).Count -eq 1) @($first, $second)
+
+    # ---------- статус твиков (CheckOnly): чтение подменено, в тестах ничего не меняется ----------
+    Write-Host 'статус твиков'
+    . (Join-Path (Join-Path $root 'lib') 'common.ps1')   # настоящий Set-Reg: секция про реестр выше подменяла его
+    $script:PB.Root = $root; $script:PB.LogDir = Join-Path $tmp 'logs'
+    $script:FakeReg = @{ 'HKCU:\X|A' = 1; 'HKCU:\X|B' = 0; 'HKCU:\X|S' = 'abc'; 'HKCU:\X|M' = @('a', 'b'); 'HKCU:\X|N' = -1 }
+    function Get-PbRegValue ([string]$Path, [string]$Name) { $k = "$Path|$Name"; if ($script:FakeReg.ContainsKey($k)) { @{ Exists = $true; Value = $script:FakeReg[$k] } } else { @{ Exists = $false } } }
+    function Get-PbSvcMode ([string]$Name) { @{ DiagTrack = 'Disabled'; Other = 'Auto' }[$Name] }
+    function Get-PbTaskState ([string]$P, [string]$N) { @{ T1 = 'Disabled'; T2 = 'Ready' }[$N] }
+    function Test-PbAppxPresent ([string]$Name) { $Name -eq 'Still.There' }
+    $before = $script:PB.Changes.Count
+    $tw = @(
+        @{ Id = 't.all'; Apply = { Set-Reg 'HKCU:\X' 'A' 1; Set-Reg 'HKCU:\X' 'S' 'abc' -Type String; Set-Reg 'HKCU:\X' 'M' @('a', 'b') -Type MultiString; Set-Reg 'HKCU:\X' 'N' 0xFFFFFFFF; Set-SvcStart 'DiagTrack' 'Disabled'; Disable-Task '\' 'T1' } }
+        @{ Id = 't.part'; Apply = { Set-Reg 'HKCU:\X' 'A' 1; Set-Reg 'HKCU:\X' 'B' 1; Disable-Task '\' 'T2' } }
+        @{ Id = 't.no'; Apply = { Set-Reg 'HKCU:\X' 'Missing' 1; Set-SvcStart 'Other' 'Disabled' } }
+        @{ Id = 't.appx'; Apply = { Remove-Appx @('Gone.App', 'Still.There') } }
+        @{ Id = 't.unsafe'; Apply = { Set-Reg 'HKCU:\X' 'A' 1; & powercfg.exe /hibernate off } }
+        @{ Id = 't.nothing'; Apply = { Set-SvcStart 'NoSuchService' 'Disabled' } }
+        @{ Id = 't.check'; Check = { $true }; Apply = { Stop-Process -Name explorer } }
+    )
+    $st = @($tw | ForEach-Object { "$($_.Id)=$(Get-PbTweakStatus $_)" }) -join ' '
+    Check 'твики: применено / частично / нет / Appx / небезопасный / нечего проверять / свой Check' ($st -eq 't.all=applied t.part=partial t.no=no t.appx=partial t.unsafe=unknown t.nothing=unknown t.check=applied') $st
+    Check 'проверка ничего не пишет в журнал изменений' ($script:PB.Changes.Count -eq $before -and -not $script:PB.CheckOnly)
+    . (Join-Path (Join-Path $root 'catalog') 'tweaks.ps1')
+    $unk = @($Tweaks | Where-Object { -not $_.Check -and -not (Test-PbTweakCheckable $_) } | ForEach-Object { $_.Id }) -join ','
+    Check 'каталог: без проверки только env.terminal, env.pwshprofile, env.upgrade' ($unk -eq 'env.terminal,env.pwshprofile,env.upgrade') $unk
+    foreach ($f in 'Get-PbRegValue', 'Get-PbSvcMode', 'Get-PbTaskState', 'Test-PbAppxPresent') { Remove-Item "function:$f" }
+    . (Join-Path (Join-Path $root 'lib') 'common.ps1')   # вернуть настоящие функции чтения
+    $script:PB.Root = $root
+
+    # ---------- статус программ ----------
+    Write-Host 'статус программ'
+    $en = @("`r  - `r",
+        'Name               Id                    Version      Available    Source',
+        '---------------------------------------------------------------------------',
+        'Git                Git.Git               2.46.0       2.47.1       winget',
+        'Notepad++ (64-bit) Notepad++.Notepad++   8.7.1                     winget',
+        'Windows Terminal   Microsoft.WindowsTer… 1.21                      winget')
+    $w = ConvertFrom-PbWingetList $en
+    Check 'winget list en: обновление, без обновления, усечённый id отброшен' ($w['git.git'].Available -eq '2.47.1' -and $w['notepad++.notepad++'].Version -eq '8.7.1' -and -not $w['notepad++.notepad++'].Available -and $w.Count -eq 2) ($w | ConvertTo-Json)
+    $ru = @('Имя            ИД                    Версия   Доступно',
+        '--------------------------------------------------------',
+        '7-Zip 24.08    7zip.7zip             24.08',
+        'Vivaldi        Vivaldi.Vivaldi       6.9.1    7.0.3215')
+    $w2 = ConvertFrom-PbWingetList $ru
+    Check 'winget list ru: 4 колонки, «Доступно» четвёртая' ($w2['vivaldi.vivaldi'].Available -eq '7.0.3215' -and $w2['7zip.7zip'].Version -eq '24.08' -and -not $w2['7zip.7zip'].Available) ($w2 | ConvertTo-Json)
+    $w3 = ConvertFrom-PbWingetList @('Name  Id       Version Source', '------------------------------', 'Ditto Ditto.Ditto 3.24 winget')
+    Check 'winget list: 4 колонки с «Источником» — не обновление' (-not $w3['ditto.ditto'].Available) ($w3 | ConvertTo-Json)
+    $entries = @(@{ Name = 'Git version 2.46.0'; Version = '2.46.0' }, @{ Name = 'GitHub CLI'; Version = '2.60' }, @{ Name = 'Npcap 1.80'; Version = '1.80' })
+    Check 'реестр: «Git» не путается с «GitHub CLI», Detect для сайта' ((Find-PbUninstallEntry @{ Name = 'Git' } $entries).Version -eq '2.46.0' -and (Find-PbUninstallEntry @{ Name = 'GitHub CLI' } $entries).Version -eq '2.60' -and
+        (Find-PbUninstallEntry @{ Name = 'Npcap'; Detect = 'Npcap*' } $entries) -and -not (Find-PbUninstallEntry @{ Name = 'Gi' } $entries))
+    $git = @{ Id = 'git'; Name = 'Git'; WingetId = 'Git.Git' }; $vs = @{ Id = 'vscode'; Name = 'VS Code'; WingetId = 'Microsoft.VisualStudioCode' }
+    $np = @{ Id = 'npcap'; Name = 'Npcap'; Source = 'web'; Detect = 'Nothing*' }
+    $s1 = @((Get-PbAppStatus $git $entries $null).Kind, (Get-PbAppStatus $vs $entries $null).Kind, (Get-PbAppStatus $np $entries $null).Kind) -join ','
+    Check 'шаг 1 (реестр): установлено / неизвестно до winget / сайт — не установлено' ($s1 -eq 'installed,unknown,missing') $s1
+    $s2 = Get-PbAppStatus $git $entries $w; $s3 = Get-PbAppStatus $vs $entries $w
+    Check 'шаг 2 (winget): обновление с версиями, нет в winget и реестре — не установлено' ($s2.Kind -eq 'update' -and $s2.Text -eq 'обновление: 2.46.0 → 2.47.1' -and $s3.Kind -eq 'missing') @($s2, $s3)
+
+    # ---------- план и прогон (установка, твики и вопрос подменены) ----------
+    Write-Host 'план и прогон'
+    $script:PB.Results.Clear(); $script:PB.Manual.Clear(); $script:PB.Changes.Clear(); $script:PB.DataRoot = Join-Path $tmp 'nodata'
+    $tws = @(@{ Id = 'p.a'; Name = 'Твик А'; Phase = 'pre'; Apply = {} }, @{ Id = 'p.irr'; Name = 'Удалить X'; Phase = 'pre'; Irreversible = $true; Apply = {} },
+             @{ Id = 'p.post'; Name = 'После'; Phase = 'post'; Apply = {} })
+    $aps = @(@{ Id = 'a1'; Name = 'Прог 1'; Source = 'winget'; WingetId = 'A.One' }, @{ Id = 'a2'; Name = 'Прог 2'; Source = 'web'; Interactive = $true },
+             @{ Id = 'a3'; Name = 'Прог 3'; Source = 'winget'; WingetId = 'A.Three'; Config = @{ File = 'nothing\x.json'; Import = 'Set-NoConfig' } })
+    $sel = @{ Apps = @('a1', 'a2', 'a3'); Tweaks = @('p.a', 'p.irr', 'p.post'); Configs = @('a3'); Files = @('f.zip'); FileTitles = @('Файл.zip'); Name = 'PC-02'; Upgrades = @('a1') }
+    $stat = @{ Apps = @{ a1 = @{ Kind = 'update'; Text = 'обновление: 1 → 2' }; a3 = @{ Kind = 'installed' } }; Tweaks = @{ 'p.a' = 'applied' } }
+    $plan = Get-PbRunPlan $sel $aps $tws $stat
+    $ph = ($plan | ForEach-Object { $_.Phase }) -join ''
+    Check 'план: фазы по порядку' ($ph -eq '1223334567') $ph
+    $notes = @{}; foreach ($x in $plan) { $notes[$x.Key] = $x.Note }
+    Check 'план: пометки — обновление, уже установлено, сайт и мастер, нет настроек, необратимо, уже применено' ($notes['app:a1'] -eq 'обновление: 1 → 2' -and $notes['app:a3'] -match 'уже установлено' -and
+        $notes['app:a2'] -match 'сайта' -and $notes['app:a2'] -match 'мастер' -and $notes['config:a3'] -match 'нет' -and $notes['tweak:p.irr'] -match 'необратимо' -and $notes['tweak:p.a'] -match 'уже применено') ($notes | ConvertTo-Json)
+    Check 'план: пусто — пустой план' ((Get-PbRunPlan @{ Apps = @(); Tweaks = @(); Configs = @(); Files = @() } $aps $tws $null).Count -eq 0)
+
+    function Invoke-Tweak ($T) { Add-Result $T.Name 'применено' }
+    function Install-App ($A) { if ($A.Id -eq 'a2') { Add-Result $A.Name 'ОШИБКА' 'подпись не прошла' } else { Add-Result $A.Name 'установлено' } }
+    function Initialize-Winget { $true }
+    function Invoke-PbWingetTimed { @{ Code = 0 } }
+    function Set-NoConfig { Add-Result 'Прог 3: мои настройки' 'пропущено' 'нет файла' }
+    function Save-PbFiles ($Names) { Add-Result 'Файл' 'загружено' }
+    function Rename-Computer { param($NewName, [switch]$Force) }
+    function Request-PbAnswer ($Text, $Items) { $script:Asked = @($Items); $false }   # «не выполнять необратимое»
+    $sync = [hashtable]::Synchronized(@{})
+    Invoke-PbRun $plan $sel $aps $tws $sync 6>$null | Out-Null
+    $states = ($plan | ForEach-Object { "$($_.Key)=$($_.State)" }) -join ' '
+    Check 'прогон: без точки восстановления необратимое снято, ошибка и пропуск видны' ($states -eq 'restore=skip tweak:p.a=done tweak:p.irr=skip app:a1=done app:a2=error app:a3=done config:a3=skip files=done tweak:p.post=done rename=done') $states
+    Check 'прогон: спросили про необратимое, итог и флаги' (($script:Asked -join ',') -eq 'Удалить X' -and $sync.Done -and $sync.NeedReboot -and ($plan | Where-Object Key -eq 'app:a2').Detail -match 'подпись' -and $script:PB.Upgrades -contains 'a1') $sync
+    $plan2 = Get-PbRunPlan $sel $aps $tws $null
+    $sync2 = [hashtable]::Synchronized(@{ StopAfter = $true })
+    Invoke-PbRun $plan2 $sel $aps $tws $sync2 6>$null | Out-Null
+    Check 'прогон: «остановить» — остальные шаги пропущены' (@($plan2 | Where-Object { $_.State -ne 'skip' }).Count -eq 0 -and ($plan2[1].Detail -eq 'прогон остановлен'))
+    foreach ($f in 'Invoke-Tweak', 'Install-App', 'Initialize-Winget', 'Invoke-PbWingetTimed', 'Set-NoConfig', 'Save-PbFiles', 'Rename-Computer', 'Request-PbAnswer') { Remove-Item "function:$f" -ErrorAction SilentlyContinue }
+    . (Join-Path (Join-Path $root 'lib') 'common.ps1'); . (Join-Path (Join-Path $root 'lib') 'files.ps1'); . (Join-Path (Join-Path $root 'lib') 'run.ps1')
+    $script:PB.Root = $root; $script:PB.LogDir = Join-Path $tmp 'logs2'; $script:PB.DataRoot = Join-Path $tmp 'nodata'
+    New-Item -ItemType Directory $script:PB.LogDir -Force | Out-Null
+    '[{"Kind":"Reg"},{"Kind":"Reg"}]' | Set-Content (Join-Path $script:PB.LogDir 'changes_2026-10-01_101500.json')
+    '[{"Kind":"Reg"}]' | Set-Content (Join-Path $script:PB.LogDir 'changes_2026-10-30_090000.json')
+    $logs = @(Get-PbChangeLogs)
+    Check 'журналы для отката: новые первыми, дата из имени, число записей' ($logs.Count -eq 2 -and $logs[0].Count -eq 1 -and $logs[1].Date -eq [datetime]'2026-10-01 10:15:00' -and $logs[1].Count -eq 2) ($logs | ConvertTo-Json)
 
     # ---------- имена ассетов ----------
     Write-Host 'имена ассетов'

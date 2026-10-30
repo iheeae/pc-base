@@ -37,6 +37,9 @@ Windows и файлов. Название в интерфейсе и текст�
   секретов (`Remove-PbJsonSecrets` / `Remove-PbTextSecrets`) и показывается перед записью. Пути профиля — переменными
   (`ConvertTo-PbPortablePath` при снятии, `Expand-PbPortablePath` / `Copy-PbConfigIn` при применении). Реестр программ —
   `Export-PbRegKey` → JSON → `Import-PbRegJson` через `Set-Reg`, не `reg import`.
+- **Твики и статус**: в `Apply` — только `Set-Reg` / `Set-SvcStart` / `Disable-Task` / `Remove-Appx`, тогда «уже применено»
+  проверяется само (`CheckOnly`). Любая другая команда — нужен `Check = { … }` только на чтение, иначе «не проверяется».
+- **Прогон** — `lib/run.ps1`, один код для окна и `-Console`; в фоне — `$Sync`, никаких `Read-Host` (`Request-PbAnswer`).
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
   Переезд — `Move-PbLegacyDir` / `Update-PbOrigin` в `setup.ps1` и свой в `bootstrap.ps1`; ничего не удалять.
 
@@ -83,9 +86,12 @@ lib/common.ps1       $script:PB (Root, DataRoot…), $script:PbLegacy, Find-PbCo
 lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/Remove-PbSave), Мои данные (Connect-/Disconnect-PbData, Push-PbData,
                      Get-PbDataRepo, Test-PbDataPrivate), разметка (Get-PbDataLayout, Install-PbDataLayout), Invoke-PbGh
 lib/catalog.ps1      свой каталог (Read-/Write-PbUserCatalog, Add-/Remove-PbUserApp), поиск winget (Search-PbWinget, разбор по колонкам)
+lib/status.ps1       статус: программы (реестр Uninstall → winget list, ConvertFrom-PbWingetList), твики (Get-PbTweakStatus в common.ps1)
+lib/run.ps1          план и прогон: Get-PbRunPlan (шаги по фазам), Invoke-PbRun ($Sync из окна или консоль), Get-PbChangeLogs, Invoke-PbUndo
 lib/files.ps1        «Файлы»: релиз files репозитория данных (Get-PbFiles, Save-PbFiles — загрузка со сверкой SHA-256, ConvertTo-PbAssetName)
-lib/gui.ps1          окно (Show-SelectionDialog: «Установка | Снятие настроек»), «Добавить программу» (Show-AddAppDialog), значок «TR»,
-                     тема; фоновые задачи — runspace + DispatcherTimer
+lib/gui.ps1          окно (Show-SelectionDialog: «Установка | Снятие настроек», план/прогон/итог — RunPane), «Добавить программу»,
+                     «Откат изменений» (Show-UndoDialog), значок «TR», тема (на лету, Mica, высокая контрастность), ui.json;
+                     фоновые задачи — runspace + DispatcherTimer; скриптблоки твиков в фоне — только свои (tweaks.ps1 заново)
 lib/ui/              main/dialog/addapp.xaml, theme.xaml (стили), model.cs (модель для привязок)
 lib/configs.ps1      настройки программ: Export-*/Set-* по полю Config, фильтр секретов, снятие через временную папку
 catalog/apps.psd1    программы       catalog/tweaks.ps1  настройки Windows

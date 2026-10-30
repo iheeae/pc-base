@@ -15,6 +15,9 @@ $script:PB = [ordered]@{
     IsDomain             = $false
     IsLaptop             = $false
     WindowShownSec       = $null      # от запуска процесса до окна (замер — gui.ps1, запись в журнал — setup.ps1)
+    CheckOnly            = $false     # режим проверки твиков: Set-Reg и др. сравнивают, а не пишут (Get-PbTweakStatus)
+    RunSync              = $null      # прогон из окна: общий с окном Synchronized-хеш (lib\run.ps1); в консоли — $null
+    Upgrades             = @()        # id программ, для которых выбрано обновление (статус «есть обновление»)
 }
 
 # ---------- переезд pc-base → Tabula Rasa ----------
@@ -109,6 +112,45 @@ function Update-SessionPath {
 }
 
 # ---------- реестр, службы, задачи (всё пишется в журнал изменений для undo.ps1) ----------
+# В режиме $script:PB.CheckOnly эти функции ничего не меняют: сравнивают текущее с нужным (Add-PbCheck).
+# Чтение — отдельными функциями (Get-PbRegValue и др.), чтобы проверки можно было гонять без Windows (tests\run.ps1)
+
+$script:PbCheck = @{ Total = 0; Ok = 0 }
+function Add-PbCheck ([bool]$Ok) { $script:PbCheck.Total++; if ($Ok) { $script:PbCheck.Ok++ } }
+
+function Get-PbRegValue ([string]$Path, [string]$Name) {
+    try {
+        $k = Get-Item -Path $Path -ErrorAction Stop
+        if ($k.GetValueNames() -contains $Name) { return @{ Exists = $true; Value = $k.GetValue($Name, $null, 'DoNotExpandEnvironmentNames') } }
+    } catch { }
+    return @{ Exists = $false; Value = $null }
+}
+function Get-PbRegDefault ([string]$Path) {
+    try { $k = Get-Item -Path $Path -ErrorAction Stop; return @{ Exists = $true; Value = $k.GetValue('') } } catch { return @{ Exists = $false; Value = $null } }
+}
+function Get-PbSvcMode ([string]$Name) {   # Auto / Manual / Disabled или $null, если службы нет
+    if (-not (Get-Service -Name $Name -ErrorAction SilentlyContinue)) { return $null }
+    return [string](Get-CimInstance Win32_Service -Filter "Name='$Name'").StartMode
+}
+function Get-PbTaskState ([string]$TaskPath, [string]$TaskName) {
+    $t = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($t) { return [string]$t.State } else { return $null }
+}
+function Test-PbAppxPresent ([string]$Name) { [bool](Get-AppxPackage -AllUsers -Name $Name -ErrorAction SilentlyContinue) }
+
+# значение реестра совпадает с нужным: числа — как числа (DWord бывает отрицательным), массивы — поэлементно
+function Test-PbSameValue ($Cur, $Want) {
+    if ($Want -is [array] -or $Cur -is [array]) {
+        $a = @($Cur); $b = @($Want)
+        if ($a.Count -ne $b.Count) { return $false }
+        for ($i = 0; $i -lt $a.Count; $i++) { if (-not (Test-PbSameValue $a[$i] $b[$i])) { return $false } }
+        return $true
+    }
+    if ($Want -is [int] -or $Want -is [long] -or $Want -is [uint32]) {
+        try { return (([int64]$Cur -band 0xFFFFFFFF) -eq ([int64]$Want -band 0xFFFFFFFF)) } catch { return $false }
+    }
+    return [string]$Cur -ceq [string]$Want
+}
 
 # запись в журнал изменений и сразу на диск: если прогон оборвётся (закрыли окно, сбой питания), undo.ps1 всё равно
 # откатит уже сделанное. Записей — сотни, перезапись файла целиком на каждую не заметна
@@ -124,6 +166,7 @@ function Set-Reg {
         [Parameter(Mandatory)]$Value,
         [ValidateSet('DWord', 'QWord', 'String', 'ExpandString', 'MultiString', 'Binary')][string]$Type = 'DWord'
     )
+    if ($script:PB.CheckOnly) { $c = Get-PbRegValue $Path $Name; Add-PbCheck ($c.Exists -and (Test-PbSameValue $c.Value $Value)); return }
     $keyCreated = $false
     if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null; $keyCreated = $true }
     $oldExists = $false; $oldValue = $null; $oldKind = $null
@@ -144,6 +187,7 @@ function Set-Reg {
 
 # Значение по умолчанию у ключа, например для классического контекстного меню.
 function Set-RegDefault ([string]$Path, [string]$Value) {
+    if ($script:PB.CheckOnly) { $c = Get-PbRegDefault $Path; Add-PbCheck ($c.Exists -and [string]$c.Value -ceq $Value); return }
     $existed = Test-Path $Path
     if (-not $existed) { New-Item -Path $Path -Force | Out-Null }
     Set-Item -Path $Path -Value $Value -Force
@@ -151,6 +195,11 @@ function Set-RegDefault ([string]$Path, [string]$Value) {
 }
 
 function Set-SvcStart ([string]$Name, [ValidateSet('Disabled', 'Manual', 'Automatic')][string]$Start) {
+    if ($script:PB.CheckOnly) {
+        $m = Get-PbSvcMode $Name
+        if ($m) { Add-PbCheck ($m -eq ($Start -replace '^Automatic$', 'Auto')) }   # службы нет — нечего проверять
+        return
+    }
     $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if (-not $svc) { return }
     $old = (Get-CimInstance Win32_Service -Filter "Name='$Name'").StartMode
@@ -160,6 +209,7 @@ function Set-SvcStart ([string]$Name, [ValidateSet('Disabled', 'Manual', 'Automa
 }
 
 function Disable-Task ([string]$TaskPath, [string]$TaskName) {
+    if ($script:PB.CheckOnly) { $st = Get-PbTaskState $TaskPath $TaskName; if ($st) { Add-PbCheck ($st -eq 'Disabled') }; return }
     $t = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $t) { return }
     $wasEnabled = $t.State -ne 'Disabled'
@@ -169,6 +219,7 @@ function Disable-Task ([string]$TaskPath, [string]$TaskName) {
 
 # Удаление UWP у всех пользователей и из образа (чтобы не вернулись у новых профилей). Не откатывается.
 function Remove-Appx ([string[]]$Names) {
+    if ($script:PB.CheckOnly) { foreach ($n in $Names) { Add-PbCheck (-not (Test-PbAppxPresent $n)) }; return }
     $prov = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
     foreach ($n in $Names) {
         $pk = Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue
@@ -241,10 +292,11 @@ function Invoke-PbWingetTimed ([string[]]$WingetArgs, [double]$TimeoutMin = 15, 
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = [Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync()
-    $limit = [int]($TimeoutMin * 60); $timedOut = $false; $said = 0
+    $limit = [int]($TimeoutMin * 60); $timedOut = $false; $skipped = $false; $said = 0
     while (-not $p.WaitForExit(1000)) {
         $sec = [int]$sw.Elapsed.TotalSeconds
         if ($sec -ge $limit) { $timedOut = $true; Stop-PbProcessTree $p.Id; break }
+        if ($script:PB.RunSync -and $script:PB.RunSync.SkipCurrent) { $skipped = $true; Stop-PbProcessTree $p.Id; break }   # «Пропустить» в окне
         if ($sec - $said -ge 15) {
             $said = $sec
             Write-Host ("      … идёт {0}:{1:00}, ограничение {2} мин" -f [int][Math]::Floor($sec / 60), ($sec % 60), $TimeoutMin) -ForegroundColor DarkGray
@@ -255,8 +307,8 @@ function Invoke-PbWingetTimed ([string[]]$WingetArgs, [double]$TimeoutMin = 15, 
     try { $text += $out.Result + $err.Result } catch { }
     try { [IO.File]::WriteAllText($log, $text, (New-Object Text.UTF8Encoding $false)) } catch { }
     $code = $null
-    if (-not $timedOut -and $p.HasExited) { $code = $p.ExitCode }
-    return @{ Code = $code; TimedOut = $timedOut; Log = $log; Seconds = [int]$sw.Elapsed.TotalSeconds; Out = @($text -split "`r?`n" | Select-Object -Skip 1) }
+    if (-not $timedOut -and -not $skipped -and $p.HasExited) { $code = $p.ExitCode }
+    return @{ Code = $code; TimedOut = $timedOut; Skipped = $skipped; Log = $log; Seconds = [int]$sw.Elapsed.TotalSeconds; Out = @($text -split "`r?`n" | Select-Object -Skip 1) }
 }
 
 function Test-WingetInstalled ([string]$Id) {
@@ -282,15 +334,21 @@ function Get-PbWingetCodeInfo ($Code) {
 
 # TimeoutMin в каталоге — для тяжёлых пакетов; по умолчанию 15 мин, с мастером установки — 60
 function Install-WingetApp ($App) {
-    if (Test-WingetInstalled $App.WingetId) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
-    $a = @('install', '--id', $App.WingetId, '-e', '--source', 'winget',
+    $verb = 'install'
+    if (Test-WingetInstalled $App.WingetId) {
+        # обновление — только если в окне выбрано «есть обновление»; иначе установленное не трогаем
+        if ($script:PB.Upgrades -notcontains $App.Id) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
+        $verb = 'upgrade'
+    }
+    $a = @($verb, '--id', $App.WingetId, '-e', '--source', 'winget',
            '--accept-package-agreements', '--accept-source-agreements')
     if ($App.Interactive) { $a += '--interactive' } else { $a += @('--silent', '--disable-interactivity') }
     if ($App.Scope)    { $a += @('--scope', $App.Scope) }
     if ($App.Override) { $a += @('--override', $App.Override) }
     $limit = if ($App.TimeoutMin) { [double]$App.TimeoutMin } elseif ($App.Interactive) { 60 } else { 15 }
-    Write-Host "    установка $($App.Name) ($($App.WingetId)), не дольше $limit мин..." -ForegroundColor Gray
+    Write-Host "    $(if ($verb -eq 'upgrade') { 'обновление' } else { 'установка' }) $($App.Name) ($($App.WingetId)), не дольше $limit мин..." -ForegroundColor Gray
     $r = Invoke-PbWingetTimed $a $limit $App.WingetId
+    if ($r.Skipped) { Write-Skip "$($App.Name): пропущено вручную"; Add-Result $App.Name 'пропущено' 'пропущено вручную'; return }
     if ($r.TimedOut) {
         Write-Fail "$($App.Name): установка не завершилась за $limit мин и прервана"
         Add-Result $App.Name 'ТАЙМАУТ' "прервано через $limit мин; журнал winget: $($r.Log)"
@@ -299,7 +357,7 @@ function Install-WingetApp ($App) {
     $i = Get-PbWingetCodeInfo $r.Code
     if ($i.Reboot) { $script:PB.NeedReboot = $true }
     if ($i.Ok -or (Test-WingetInstalled $App.WingetId)) {
-        Write-Ok "$($App.Name)$(if ($i.Text) { ": $($i.Text)" })"; Add-Result $App.Name 'установлено' ([string]$i.Text)
+        Write-Ok "$($App.Name)$(if ($i.Text) { ": $($i.Text)" })"; Add-Result $App.Name $(if ($verb -eq 'upgrade') { 'обновлено' } else { 'установлено' }) ([string]$i.Text)
     } else {
         Write-Fail "$($App.Name): $($i.Text)"; Add-Result $App.Name 'ОШИБКА' "$($i.Text); журнал winget: $($r.Log)"
     }
@@ -355,6 +413,34 @@ function Install-App ($App) {
     } catch {
         Write-Fail "$($App.Name): $($_.Exception.Message)"; Add-Result $App.Name 'ОШИБКА' $_.Exception.Message
     }
+}
+
+# ---------- статус твиков: применено / частично / нет ----------
+# Apply выполняется в режиме CheckOnly: Set-Reg и др. сравнивают, а не пишут. Только если в Apply нет команд вне
+# списка ниже — иначе нужен свой Check = { … } (только чтение, возвращает $true/$false) или статус «не проверяется»
+
+$script:PbCheckSafe = @('Set-Reg', 'Set-RegDefault', 'Set-SvcStart', 'Disable-Task', 'Remove-Appx', 'Write-Warn2', 'Write-Ok', 'Write-Skip',
+    'Get-ItemProperty', 'Get-ItemPropertyValue', 'Test-Path', 'Join-Path', 'Get-Command', 'Where-Object', 'Select-Object', 'ForEach-Object', 'Out-Null')
+
+function Test-PbTweakCheckable ($Tweak) {
+    $cmds = @($Tweak.Apply.Ast.FindAll({ $args[0] -is [Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
+    return -not @($cmds | Where-Object { -not $_ -or $script:PbCheckSafe -notcontains $_ }).Count
+}
+
+# 'applied' | 'partial' | 'no' | 'unknown'
+function Get-PbTweakStatus ($Tweak) {
+    if ($Tweak.Check) {
+        try { if (& $Tweak.Check) { return 'applied' } else { return 'no' } } catch { return 'unknown' }
+    }
+    if (-not $Tweak.Apply -or -not (Test-PbTweakCheckable $Tweak)) { return 'unknown' }
+    $script:PbCheck.Total = 0; $script:PbCheck.Ok = 0
+    $script:PB.CheckOnly = $true
+    try { [void](& $Tweak.Apply 6>$null) } catch { return 'unknown' }
+    finally { $script:PB.CheckOnly = $false }
+    if (-not $script:PbCheck.Total) { return 'unknown' }
+    if ($script:PbCheck.Ok -eq $script:PbCheck.Total) { return 'applied' }
+    if ($script:PbCheck.Ok -eq 0) { return 'no' }
+    return 'partial'
 }
 
 function Invoke-Tweak ($Tweak) {

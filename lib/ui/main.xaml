@@ -16,21 +16,19 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ===== шапка ===== -->
+        <!-- ===== шапка: три зоны, которые не перекрываются ===== -->
+        <!-- слева — значок, название, чипы (сжимаются из gui.ps1 Update-HostChips); по центру — режим; справа — поиск и действия -->
         <Border Grid.Row="0" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,0,1">
-            <Grid Margin="24,16">
+            <Grid Margin="24,14">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*" MinWidth="140"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Image x:Name="Logo" Width="20" Height="20" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="Tabula Rasa" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    <!-- имя ПК, ОС, «в домене» — чипами -->
-                    <ItemsControl x:Name="HostChips" Margin="8,0,0,0" VerticalAlignment="Center" Focusable="False">
+                <DockPanel x:Name="HeadLeft" ClipToBounds="True" Margin="0,0,16,0" LastChildFill="True">
+                    <Image x:Name="Logo" DockPanel.Dock="Left" Width="20" Height="20" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <TextBlock DockPanel.Dock="Left" Text="Tabula Rasa" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <ItemsControl x:Name="HostChips" Margin="10,0,0,0" VerticalAlignment="Center" Focusable="False">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <StackPanel Orientation="Horizontal"/>
@@ -38,16 +36,20 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Style="{StaticResource Pill}">
-                                    <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                                <Border Style="{StaticResource Pill}" ToolTip="{Binding Tip}" MaxWidth="{Binding MaxWidth}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Glyph}" Text="{Binding Icon}" FontSize="12" VerticalAlignment="Center"
+                                                   Visibility="{Binding HasIcon, Converter={StaticResource Vis}}"/>
+                                        <TextBlock Text="{Binding Text}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </StackPanel>
+                </DockPanel>
                 <!-- режим окна: установка (каталог) или снятие настроек с этого компьютера -->
                 <Border Grid.Column="1" Height="32" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
-                        Background="{DynamicResource Control}" Margin="0,0,16,0">
+                        Background="{DynamicResource Control}" Margin="0,0,16,0" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
                         <RadioButton x:Name="TabInstall" GroupName="Tab" Style="{StaticResource Segment}" Content="Установка" Height="30" Padding="12,0"
                                      IsChecked="True" ToolTip="Программы, настройки Windows и файлы для этого компьютера"/>
@@ -55,33 +57,43 @@
                                      ToolTip="Сохранить настройки программ этого компьютера в «Мои данные»"/>
                     </StackPanel>
                 </Border>
-                <Grid x:Name="SearchBox" Grid.Column="2" Width="320" Margin="0,0,8,0">
-                    <TextBox x:Name="Search" AutomationProperties.Name="Поиск" Padding="32,0,32,0" Tag="Поиск по всему…"/>
-                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE721;" FontSize="14" Margin="12,0,0,0"
-                               HorizontalAlignment="Left" Foreground="{DynamicResource TextMuted}" IsHitTestVisible="False"/>
-                    <Border x:Name="SearchKey" Style="{StaticResource Kbd}" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False">
-                        <TextBlock Text="Ctrl+F" VerticalAlignment="Center"/>
-                    </Border>
-                    <Button x:Name="SearchClear" AutomationProperties.Name="Очистить поиск" HorizontalAlignment="Right" Width="24" MinWidth="24" Height="24" Padding="0" Margin="0,0,4,0"
-                            Background="Transparent" BorderThickness="0" Focusable="False" Visibility="Collapsed" ToolTip="Очистить (Esc)">
-                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Grid x:Name="SearchBox" Width="300" Margin="0,0,8,0">
+                        <TextBox x:Name="Search" AutomationProperties.Name="Поиск" Padding="32,0,32,0" Tag="Поиск по всему…"/>
+                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE721;" FontSize="14" Margin="12,0,0,0"
+                                   HorizontalAlignment="Left" Foreground="{DynamicResource TextMuted}" IsHitTestVisible="False"/>
+                        <Border x:Name="SearchKey" Style="{StaticResource Kbd}" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False">
+                            <TextBlock Text="Ctrl+F" VerticalAlignment="Center"/>
+                        </Border>
+                        <Button x:Name="SearchClear" AutomationProperties.Name="Очистить поиск" HorizontalAlignment="Right" Width="24" MinWidth="24" Height="24" Padding="0" Margin="0,0,4,0"
+                                Background="Transparent" BorderThickness="0" Focusable="False" Visibility="Collapsed" ToolTip="Очистить (Esc)">
+                            <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"/>
+                        </Button>
+                    </Grid>
+                    <Button x:Name="AddAppBtn" Padding="12,0" Margin="0,0,8,0" MinWidth="0" AutomationProperties.Name="Добавить программу"
+                            ToolTip="Добавить программу из winget в собственный каталог («Мои данные»)">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Glyph}" Text="&#xE710;" FontSize="12"/>
+                            <TextBlock x:Name="AddAppText" Text="Программа" Margin="8,0,0,0"/>
+                        </StackPanel>
                     </Button>
-                </Grid>
-                <Button x:Name="AddAppBtn" Grid.Column="3" Padding="12,0" Margin="0,0,8,0" ToolTip="Добавить программу из winget в собственный каталог («Мои данные»)">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE710;" FontSize="12" Margin="0,0,8,0"/>
-                        <TextBlock Text="Программа"/>
-                    </StackPanel>
-                </Button>
-                <Button x:Name="SetBtn" Grid.Column="4" Padding="12,0" ToolTip="Сохранённые наборы галочек: открыть, сохранить, переименовать, удалить (Ctrl+S — сохранить)">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock x:Name="SetBtnText" Text="Сохранения" MaxWidth="240" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE70D;" FontSize="10" Margin="8,0,0,0"/>
-                    </StackPanel>
-                    <Button.ContextMenu>
-                        <ContextMenu x:Name="SetMenu" Placement="Bottom"/>
-                    </Button.ContextMenu>
-                </Button>
+                    <Button x:Name="SetBtn" Padding="12,0" Margin="0,0,8,0" ToolTip="Сохранённые наборы галочек: открыть, сохранить, переименовать, удалить (Ctrl+S — сохранить)">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="SetBtnText" Text="Сохранения" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Style="{StaticResource Glyph}" Text="&#xE70D;" FontSize="10" Margin="8,0,0,0"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="SetMenu" Placement="Bottom"/>
+                        </Button.ContextMenu>
+                    </Button>
+                    <!-- откат, о программе, клавиши -->
+                    <Button x:Name="MoreBtn" Style="{StaticResource IconButton}" AutomationProperties.Name="Ещё" ToolTip="Откат изменений, о программе, клавиши (F1)">
+                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE712;" FontSize="14"/>
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom"/>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -146,6 +158,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <!-- уведомление: загружено, сохранено, чего нет в каталоге -->
@@ -170,15 +183,24 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
-                            <TextBlock x:Name="ListTitle" Style="{StaticResource Title}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="ListTitle" Style="{StaticResource PageTitle}"/>
                             <TextBlock x:Name="ListHint" Style="{StaticResource Caption}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                         <StackPanel x:Name="CatButtons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Button x:Name="CatAll" Content="Всё" Margin="0,0,8,0" ToolTip="Отметить все пункты категории (без варианта «с моими настройками»)"/>
-                            <Button x:Name="CatNone" Content="Нет" ToolTip="Снять отметку со всех пунктов категории"/>
+                            <!-- трёхпозиционная: все / часть / ни одного; щелчок — отметить всё или снять всё -->
+                            <CheckBox x:Name="CatCheck" Content="Выбрать всё" IsThreeState="True" VerticalAlignment="Center"
+                                      ToolTip="Отметить или снять все пункты категории (вариант «с моими настройками» не включается)"/>
                         </StackPanel>
                     </Grid>
-                    <ListBox x:Name="List" Grid.Row="2" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
+                    <!-- фильтры по статусу программ (lib\status.ps1); видны в разделе «Программы» и в поиске -->
+                    <StackPanel x:Name="FilterBar" Grid.Row="2" Orientation="Horizontal" Margin="24,0,24,8" Visibility="Collapsed">
+                        <CheckBox x:Name="FilterMissing" Content="Не установленные" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                        <CheckBox x:Name="FilterUpdates" Content="Есть обновления" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                        <Button x:Name="MarkUpdates" Content="Отметить обновления" Visibility="Collapsed"
+                                ToolTip="Отметить все программы, для которых есть обновление: они будут обновлены через winget"/>
+                        <TextBlock x:Name="StatusScan" Style="{StaticResource Caption}" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <ListBox x:Name="List" Grid.Row="3" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
                              KeyboardNavigation.TabNavigation="Once">
                         <ListBox.GroupStyle>
                             <GroupStyle>
@@ -190,10 +212,10 @@
                             </GroupStyle>
                         </ListBox.GroupStyle>
                     </ListBox>
-                    <TextBlock x:Name="ListEmpty" Grid.Row="2" Style="{StaticResource Muted}" Margin="24,8" TextWrapping="Wrap"
+                    <TextBlock x:Name="ListEmpty" Grid.Row="3" Style="{StaticResource Muted}" Margin="24,8" TextWrapping="Wrap"
                                HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Collapsed"/>
                     <!-- «Файлы» без списка: «Мои данные» не подключены, загрузка, файлов нет, ошибка (Update-FilesCard в gui.ps1) -->
-                    <Border x:Name="FilesCard" Grid.Row="2" Margin="24,8,24,16" Padding="24" MaxWidth="560" CornerRadius="8"
+                    <Border x:Name="FilesCard" Grid.Row="3" Margin="24,8,24,16" Padding="24" MaxWidth="560" CornerRadius="8"
                             HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Collapsed"
                             Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1">
                         <Grid>
@@ -247,36 +269,59 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
                     <Grid Margin="24">
                         <StackPanel x:Name="Detail" Visibility="Collapsed">
-                            <TextBlock Text="{Binding Name}" Style="{StaticResource Title}"/>
-                            <TextBlock Text="{Binding CatName}" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
-                        <Border Style="{StaticResource Pill}" HorizontalAlignment="Left" Margin="0,8,0,0"
-                                Visibility="{Binding OpenSource, Converter={StaticResource Vis}}" ToolTip="Открытый исходный код">
-                            <TextBlock Text="Open source" VerticalAlignment="Center"/>
-                        </Border>
-                        <Border Style="{StaticResource Pill}" HorizontalAlignment="Left" Margin="0,8,0,0"
-                                Visibility="{Binding IsMine, Converter={StaticResource Vis}}" ToolTip="Программа из собственного каталога («Мои данные»)">
-                            <TextBlock Text="мой каталог" VerticalAlignment="Center"/>
-                        </Border>
-                            <CheckBox Content="Отмечено" IsChecked="{Binding IsChecked, Mode=TwoWay}" Margin="0,8,0,0"/>
+                            <!-- шапка: плитка как в карточке, название, раздел, статус на этом компьютере -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid Width="40" Height="40" Margin="0,2,12,0" VerticalAlignment="Top" Visibility="{Binding HasTile, Converter={StaticResource Vis}}">
+                                    <Border CornerRadius="8" Background="{Binding MonoBrush}">
+                                        <TextBlock Text="{Binding Monogram}" Foreground="White" FontWeight="SemiBold" FontSize="18"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <Border CornerRadius="8" Background="{DynamicResource Surface}" Visibility="{Binding HasIcon, Converter={StaticResource Vis}}">
+                                        <Image Source="{Binding IconSource}" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                    </Border>
+                                </Grid>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="{Binding Name}" Style="{StaticResource Title}"/>
+                                    <TextBlock Text="{Binding CatName}" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
+                                    <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" Margin="0,4,0,0" Foreground="{DynamicResource AccentText}"
+                                               Visibility="{Binding HasStatus, Converter={StaticResource Vis}}"/>
+                                </StackPanel>
+                            </Grid>
+                            <WrapPanel Margin="0,4,0,0">
+                                <Border Style="{StaticResource Pill}" Margin="0,4,4,0"
+                                        Visibility="{Binding OpenSource, Converter={StaticResource Vis}}" ToolTip="Открытый исходный код">
+                                    <TextBlock Text="Open source" VerticalAlignment="Center"/>
+                                </Border>
+                                <Border Style="{StaticResource Pill}" Margin="0,4,4,0"
+                                        Visibility="{Binding IsMine, Converter={StaticResource Vis}}" ToolTip="Программа из собственного каталога («Мои данные»)">
+                                    <TextBlock Text="мой каталог" VerticalAlignment="Center"/>
+                                </Border>
+                                <Border Style="{StaticResource DangerPill}" Margin="0,4,4,0" Visibility="{Binding Irreversible, Converter={StaticResource Vis}}">
+                                    <TextBlock Text="необратимо" VerticalAlignment="Center"/>
+                                </Border>
+                            </WrapPanel>
+                            <CheckBox Content="Отмечено" IsChecked="{Binding IsChecked, Mode=TwoWay}" Margin="0,12,0,0"/>
                             <TextBlock Text="{Binding FullDesc}" TextWrapping="Wrap" LineHeight="20" Margin="0,8,0,0"/>
 
+                            <!-- установка: сегмент «Чистая | С моими настройками» -->
                             <StackPanel x:Name="Install" Margin="0,24,0,0" Visibility="{Binding HasConfig, Converter={StaticResource Vis}}">
-                                <TextBlock Text="Установка" Style="{StaticResource SectionLabel}" Margin="0,0,0,4"/>
-                                <RadioButton x:Name="RbMine" GroupName="Install" IsChecked="{Binding ConfigOn, Mode=TwoWay}"
-                                             IsEnabled="{Binding ConfigAvailable}">
-                                    <StackPanel Margin="0,6">
-                                        <TextBlock x:Name="RbMineText" FontWeight="SemiBold"/>
-                                        <TextBlock Text="{Binding ConfigDesc}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                <TextBlock Text="Установка" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                <Border Height="32" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
+                                        Background="{DynamicResource Control}" HorizontalAlignment="Left">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton GroupName="Install" Style="{StaticResource Segment}" Content="Чистая" Height="30" Padding="12,0"
+                                                     IsChecked="{Binding ConfigOff, Mode=TwoWay}" ToolTip="Как после обычной установки, без переноса настроек"/>
+                                        <RadioButton x:Name="RbMine" GroupName="Install" Style="{StaticResource Segment}" Content="С моими настройками" Height="30" Padding="12,0"
+                                                     IsChecked="{Binding ConfigOn, Mode=TwoWay}" IsEnabled="{Binding ConfigAvailable}"/>
                                     </StackPanel>
-                                </RadioButton>
-                                <RadioButton GroupName="Install" IsChecked="{Binding ConfigOff, Mode=TwoWay}">
-                                    <StackPanel Margin="0,6">
-                                        <TextBlock Text="Чистая" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Как после обычной установки, без переноса настроек." Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                </RadioButton>
+                                </Border>
+                                <TextBlock Text="{Binding ConfigDesc}" Style="{StaticResource Caption}" TextWrapping="Wrap" LineHeight="18" Margin="0,8,0,0"/>
                                 <!-- почему «с моими» недоступно: файла настроек нет ни в своих данных, ни в движке -->
-                                <TextBlock Text="{Binding ConfigHint}" TextWrapping="Wrap" LineHeight="20" Margin="28,4,0,0" Foreground="{DynamicResource TextMuted}">
+                                <TextBlock Text="{Binding ConfigHint}" TextWrapping="Wrap" LineHeight="20" Margin="0,4,0,0" Foreground="{DynamicResource TextMuted}">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Style.Triggers>
@@ -332,7 +377,7 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <StackPanel Margin="24,16,24,8">
-                        <TextBlock Text="Снятие настроек" Style="{StaticResource Title}"/>
+                        <TextBlock Text="Снятие настроек" Style="{StaticResource PageTitle}"/>
                         <TextBlock x:Name="CaptureHint" Style="{StaticResource Caption}" Margin="0,2,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                     <ListBox x:Name="CaptureList" Grid.Row="1" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
@@ -395,6 +440,152 @@
                                Text="Перед записью показываются изменения; пароли, токены и ключи вырезаются."/>
                     <Button x:Name="CaptureBtn" Grid.Column="1" MinWidth="168" Content="Снять выбранное" Style="{StaticResource AccentButton}"/>
                 </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ===== план, прогон, итог (gui.ps1: Show-RunPane; шаги — lib\run.ps1) ===== -->
+        <Grid x:Name="RunPane" Grid.Row="1" Grid.RowSpan="2" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <StackPanel Margin="24,20,24,8">
+                <TextBlock x:Name="RunTitle" Style="{StaticResource PageTitle}"/>
+                <TextBlock x:Name="RunHint" Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                <ProgressBar x:Name="RunProgress" Height="4" Margin="0,12,0,0" Minimum="0" Maximum="1" Visibility="Collapsed"/>
+            </StackPanel>
+            <!-- нужна перезагрузка -->
+            <Border x:Name="RunBanner" Grid.Row="1" Margin="24,4,24,8" Padding="16,10" CornerRadius="6" Visibility="Collapsed"
+                    Background="{DynamicResource AccentSoft}" BorderBrush="{DynamicResource AccentText}" BorderThickness="1">
+                <DockPanel>
+                    <Button x:Name="RebootBtn" DockPanel.Dock="Right" Content="Перезагрузить сейчас" Style="{StaticResource AccentButton}" Margin="16,0,0,0"/>
+                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE777;" Foreground="{DynamicResource AccentText}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="Для завершения изменений нужна перезагрузка компьютера." VerticalAlignment="Center" TextWrapping="Wrap"/>
+                </DockPanel>
+            </Border>
+            <Grid Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="360"/>
+                </Grid.ColumnDefinitions>
+                <ListBox x:Name="RunList" Padding="24,0,16,16" KeyboardNavigation.TabNavigation="Once">
+                    <ListBox.GroupStyle>
+                        <GroupStyle>
+                            <GroupStyle.HeaderTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}" Style="{StaticResource SectionLabel}" Margin="4,16,0,6"/>
+                                </DataTemplate>
+                            </GroupStyle.HeaderTemplate>
+                        </GroupStyle>
+                    </ListBox.GroupStyle>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Row" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1"
+                                                CornerRadius="6" Margin="0,0,0,4" Padding="12,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="28"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="G" Style="{StaticResource Glyph}" Text="{Binding Glyph}" FontSize="14"
+                                                           Foreground="{DynamicResource TextMuted}" VerticalAlignment="Top" Margin="0,2,0,0"/>
+                                                <StackPanel Grid.Column="1">
+                                                    <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Note}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Note}" Value="">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding Note}" Value="{x:Null}">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding Irreversible}" Value="True">
+                                                                        <Setter Property="Foreground" Value="{DynamicResource Danger}"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <TextBlock x:Name="D" Text="{Binding Detail}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                                               Visibility="{Binding HasDetail, Converter={StaticResource Vis}}"/>
+                                                </StackPanel>
+                                                <TextBlock x:Name="S" Grid.Column="2" Text="{Binding StateText}" Style="{StaticResource Caption}" Margin="12,0,0,0" VerticalAlignment="Top"/>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding State}" Value="wait">
+                                                <Setter TargetName="S" Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding State}" Value="run">
+                                                <Setter TargetName="Row" Property="BorderBrush" Value="{DynamicResource AccentText}"/>
+                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                                                <Setter TargetName="S" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding State}" Value="done">
+                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding State}" Value="error">
+                                                <Setter TargetName="G" Property="Foreground" Value="{DynamicResource Danger}"/>
+                                                <Setter TargetName="S" Property="Foreground" Value="{DynamicResource Danger}"/>
+                                                <Setter TargetName="D" Property="Foreground" Value="{DynamicResource Danger}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+                <Border Grid.Column="1" BorderBrush="{DynamicResource Border}" BorderThickness="1,0,0,0">
+                    <Grid Margin="24,0,24,16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <!-- выполнить вручную: отметки сохраняются (logs\manual_<дата>.json) -->
+                        <StackPanel x:Name="ManualBox" Visibility="Collapsed" Margin="0,16,0,0">
+                            <TextBlock Text="Выполнить вручную" Style="{StaticResource SectionLabel}" Margin="0,0,0,8"/>
+                            <ItemsControl x:Name="ManualList" Focusable="False">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" Margin="0,0,0,8">
+                                            <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
+                                        </CheckBox>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                        <DockPanel Grid.Row="1" Margin="0,16,0,0">
+                            <Button x:Name="LogToggle" DockPanel.Dock="Top" Content="Показать журнал" HorizontalAlignment="Left"/>
+                            <TextBox x:Name="RunLog" Margin="0,8,0,0" IsReadOnly="True" FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                                     AcceptsReturn="True" Visibility="Collapsed" AutomationProperties.Name="Журнал выполнения"/>
+                        </DockPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+            <Border Grid.Row="3" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0">
+                <DockPanel Margin="24,16" LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button x:Name="RunBack" Content="Назад к выбору" Margin="8,0,0,0"/>
+                        <Button x:Name="RunSkip" Content="Пропустить текущий" Margin="8,0,0,0" ToolTip="Снять текущую установку и перейти к следующему шагу"/>
+                        <Button x:Name="RunStop" Content="Остановить после текущего" Margin="8,0,0,0"/>
+                        <Button x:Name="RunRetry" Content="Повторить упавшее" Margin="8,0,0,0"/>
+                        <Button x:Name="RunOpenLog" Content="Журналы" Margin="8,0,0,0" ToolTip="Открыть папку журналов выполнения и изменений"/>
+                        <Button x:Name="RunApply" Content="Применить…" MinWidth="152" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
+                        <Button x:Name="RunClose" Content="Закрыть" MinWidth="120" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
+                    </StackPanel>
+                    <TextBlock x:Name="RunStatus" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
             </Border>
         </Grid>
 
