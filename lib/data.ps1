@@ -174,6 +174,13 @@ function Get-PbDataState {
 # git pull --rebase + push; нет сети — коммиты остаются и уйдут в следующий раз. Возвращает $true, если всё отправлено
 function Push-PbData {
     if (-not (Test-PbDataConnected)) { return $true }
+    # клон мог остаться на другой ветке (проверка PR и т.п.) — тогда сохранения уходили бы не туда.
+    # Без незакоммиченных изменений возвращаемся на основную ветку репозитория; с ними — не трогаем.
+    $def = 'master'
+    $r = Invoke-PbGit symbolic-ref --short refs/remotes/origin/HEAD
+    if ($r.Code -eq 0 -and "$($r.Out | Select-Object -First 1)" -match '^origin/(.+)$') { $def = $Matches[1] }
+    $cur = "$((Invoke-PbGit symbolic-ref --short -q HEAD).Out | Select-Object -First 1)"
+    if ($cur -ne $def -and -not (Invoke-PbGit status --porcelain).Out) { [void](Invoke-PbGit checkout -q $def) }
     [void](Invoke-PbGit pull -q --rebase)
     $r = Invoke-PbGit push -q
     return $r.Code -eq 0

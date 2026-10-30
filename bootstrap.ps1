@@ -122,8 +122,29 @@ if ((Test-Path $Dest) -and -not (Test-OurClone $Dest)) {
     if ($Dest -eq $Legacy) { $Dest = 'C:\tabula-rasa' }   # a fresh clone goes to the new place
 }
 if (Test-Path (Join-Path $Dest '.git')) {
+    # Always the latest version: bring the clone to origin/master whatever branch it is on.
+    # Nothing is lost: local edits go to git stash, own commits on master to branch backup/master-<date>.
     Say "Updating $Dest"
-    git -C $Dest pull --ff-only
+    git -C $Dest fetch --quiet origin $Branch
+    if ($LASTEXITCODE -ne 0) {
+        Say 'No connection to GitHub: starting the current version without an update.' 'Yellow'
+    } else {
+        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+        if (git -C $Dest status --porcelain) {
+            git -C $Dest stash push --include-untracked -m "tabula-rasa: local changes before update $stamp" | Out-Null
+            Say "Local changes in $Dest saved to git stash ($stamp)." 'Yellow'
+        }
+        git -C $Dest merge-base --is-ancestor $Branch "origin/$Branch" 2>$null
+        if ($LASTEXITCODE -eq 1) {
+            git -C $Dest branch -f "backup/$Branch-$stamp" $Branch | Out-Null
+            Say "Local commits on $Branch saved to branch backup/$Branch-$stamp." 'Yellow'
+        }
+        git -C $Dest checkout -q -B $Branch "origin/$Branch"
+        git -C $Dest branch -q "--set-upstream-to=origin/$Branch" $Branch 2>$null
+        if ((git -C $Dest rev-parse HEAD) -ne (git -C $Dest rev-parse "origin/$Branch")) {
+            Say 'Update failed: starting the current version.' 'Yellow'
+        }
+    }
 } else {
     Say "Cloning $Repo into $Dest"
     git clone --branch $Branch "https://github.com/$Repo.git" $Dest

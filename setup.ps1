@@ -42,13 +42,70 @@ if (-not $isAdmin -or -not $isSta) {
 }
 
 $Host.UI.RawUI.WindowTitle = 'Tabula Rasa'
+
+# ---------- самая свежая версия: до загрузки lib\*.ps1 ----------
+# Клон движка всегда приводится к origin/master — другая ветка, отставание или локальные правки не повод запускать
+# старую версию. Ничего не теряется: правки уходят в git stash, свои коммиты master — в ветку backup/master-<дата>.
+# Если версия изменилась, этот же setup.ps1 перезапускается, чтобы окно работало уже на новом коде.
+# Повторный запуск помечается переменной TR_ENGINE_SYNCED, чтобы не проверять второй раз.
+$preNotices = @()
+if ($env:TR_ENGINE_NOTICE) { $preNotices += @($env:TR_ENGINE_NOTICE -split "`n" | Where-Object { $_ }) }
+$env:TR_ENGINE_NOTICE = $null
+$engineSynced = $env:TR_ENGINE_SYNCED -eq '1'
+$env:TR_ENGINE_SYNCED = $null
+if (-not $NoPull -and -not $engineSynced -and (Get-Command git -ErrorAction SilentlyContinue) -and
+    (Test-Path (Join-Path $PSScriptRoot '.git'))) {
+    function Invoke-EngineGit { & git -C $PSScriptRoot @args 2>$null }
+    $engineOrigin = Invoke-EngineGit remote get-url origin
+    # только свой клон (в том числе старый адрес до переименования); чужой разбирает блок «старый клон» ниже
+    if ($engineOrigin -match 'github\.com[/:]iheeae/(tabula-rasa|pc-base)(\.git)?/?$') {
+        Write-Host '  Проверка обновлений Tabula Rasa...' -ForegroundColor Gray
+        $before = Invoke-EngineGit rev-parse HEAD
+        Invoke-EngineGit fetch --quiet origin master | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $preNotices += 'Нет связи с GitHub: обновления не проверены, запущена текущая версия Tabula Rasa.'
+        } else {
+            $target = Invoke-EngineGit rev-parse origin/master
+            $branch = Invoke-EngineGit symbolic-ref --short -q HEAD
+            if ($before -ne $target -or $branch -ne 'master') {
+                $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+                if (Invoke-EngineGit status --porcelain) {
+                    Invoke-EngineGit stash push --include-untracked -m "tabula-rasa: локальные изменения перед обновлением $stamp" | Out-Null
+                    $preNotices += "Локальные изменения в $PSScriptRoot перед обновлением сохранены в git stash ($stamp)."
+                }
+                Invoke-EngineGit merge-base --is-ancestor master origin/master
+                if ($LASTEXITCODE -eq 1) {   # у локальной master есть коммиты, которых нет на GitHub
+                    Invoke-EngineGit branch -f "backup/master-$stamp" master | Out-Null
+                    $preNotices += "Локальные коммиты ветки master сохранены в ветке backup/master-$stamp."
+                }
+                Invoke-EngineGit checkout -q -B master origin/master | Out-Null
+                Invoke-EngineGit branch -q --set-upstream-to=origin/master master | Out-Null
+                $after = Invoke-EngineGit rev-parse HEAD
+                if ($after -ne $target) {
+                    $preNotices += "Не удалось обновить Tabula Rasa в $($PSScriptRoot): запущена текущая версия."
+                } elseif ($after -ne $before) {
+                    Write-Host "  Tabula Rasa обновлён: $($before.Substring(0, 7)) -> $($after.Substring(0, 7)). Перезапуск..." -ForegroundColor Green
+                    $env:TR_ENGINE_SYNCED = '1'
+                    $env:TR_ENGINE_NOTICE = ($preNotices -join "`n")
+                    $relaunch = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
+                    if ($Selection) { $relaunch += @('-Selection', $Selection) }
+                    if ($DryRun) { $relaunch += '-DryRun' }
+                    if ($DataRoot) { $relaunch += @('-DataRoot', $DataRoot) }
+                    & powershell.exe @relaunch
+                    exit $LASTEXITCODE
+                }
+            }
+        }
+    }
+}
+
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 . (Join-Path $PSScriptRoot 'lib\gui.ps1')
 . (Join-Path $PSScriptRoot 'lib\configs.ps1')
 $script:PB.Root = $PSScriptRoot
 if ($DataRoot) { $script:PB.DataRoot = $DataRoot }
 $EngineRepo = 'iheeae/tabula-rasa'
-$startNotices = @()
+$startNotices = @($preNotices)
 
 # загрузчик в отдельном окне: переносит или заново клонирует папку движка. Сами выходим сразу, чтобы не держать её
 function Start-PbBootstrap {
@@ -124,15 +181,7 @@ $transcript = Join-Path $script:PB.LogDir "setup_$($script:PB.Stamp).log"
 Start-Transcript -Path $transcript -Force | Out-Null
 
 try {
-    # ---------- свежая версия базы ----------
-    if (-not $NoPull -and (Get-Command git -ErrorAction SilentlyContinue)) {
-        $top = & git -C $PSScriptRoot rev-parse --show-toplevel 2>$null
-        if ($LASTEXITCODE -eq 0 -and $top) {
-            Write-Step 'Обновление Tabula Rasa'
-            & git -C $top pull --ff-only
-            if ($LASTEXITCODE -ne 0) { Write-Warn2 'git pull не выполнен, используется текущая версия' }
-        }
-    }
+    # свежая версия движка подтягивается в самом начале, до загрузки lib\*.ps1 (см. «самая свежая версия»)
     # Мои данные: подтянуть с GitHub и отправить то, что не ушло в прошлый раз
     if (-not $NoPull -and (Test-PbDataConnected)) {
         Write-Step "Мои данные ($($script:PB.DataRoot)): синхронизация с GitHub"

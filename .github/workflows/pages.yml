@@ -1,5 +1,5 @@
 # Короткая ссылка на загрузчик: bootstrap.ps1 публикуется корнем GitHub Pages,
-# так что работает  irm iheeae.github.io/pc-base | iex
+# так что работает  irm iheeae.github.io/tabula-rasa | iex
 # Нужно один раз включить: Settings → Pages → Source: GitHub Actions.
 name: pages
 
