@@ -85,7 +85,9 @@ $(if ($cnt.wait + $cnt.run) { "<span class=`"pill wait`">Не выполнено
     foreach ($s in $steps) {
         if ($s.PhaseName -ne $ph) { $ph = $s.PhaseName; [void]$sb.Append("<tr class=`"ph`"><td colspan=`"3`">$(ConvertTo-PbHtml $ph)</td></tr>`n") }
         $st = [string]$s.State
-        $d = @($s.Detail, $s.Note | Where-Object { $_ }) -join ' · '
+        # пометка плана («уже установлено: будет пропущено») не повторяет результат («уже установлено»)
+        $note = if ($s.Note -and $s.Detail -and ([string]$s.Note).StartsWith([string]$s.Detail)) { '' } else { $s.Note }
+        $d = @($s.Detail, $note | Where-Object { $_ }) -join ' · '
         [void]$sb.Append("<tr><td>$(ConvertTo-PbHtml $s.Name)</td><td class=`"st $st`">$($script:PbStepStateText[$st])</td><td class=`"d`">$(ConvertTo-PbHtml $d)</td></tr>`n")
     }
     [void]$sb.Append("</table></div>`n<h2>Откат и журналы</h2><div class=`"card`"><dl>`n")
