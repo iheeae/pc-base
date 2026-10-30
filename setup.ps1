@@ -169,10 +169,8 @@ try {
         $p = Find-PbSave $Selection
         if ($p) { $initial = Read-SaveFile $p } else { Write-Warn2 "Сохранение не найдено: $Selection" }
     }
-    # файлы pc-base-exe показываем в окне, только если Диск уже виден; иначе — выбор во время прогона
-    $driveDir = Find-InstallersDir
-    $driveItems = if ($driveDir) { @(Get-DriveItems $driveDir) } else { $null }
-    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -DriveItems $driveItems -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain
+    # список файлов окно получает само, в фоне: из релиза files «Моих данных»
+    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain
     if (-not $sel) { Write-Host '  Отменено.'; return }
     $DryRun = $sel.DryRun
     $newName = $sel.Name
@@ -187,8 +185,7 @@ try {
         $preTw | ForEach-Object { Write-Host "    твик:      $($_.Name)$(if ($_.Irreversible) { '   [необратимо]' })" }
         $selApps | ForEach-Object { Write-Host "    программа: $($_.Name) [$($_.Source)]" }
         $selCfg | ForEach-Object { Write-Host "    настройки: $($_.Name) — $($_.ConfigName)" }
-        $sel.Files | ForEach-Object { Write-Host "    с Диска:   $_" }
-        if ($sel.FilesAsk -and -not $sel.Files.Count) { Write-Host '    с Диска:   выбор во время прогона' }
+        $sel.FileTitles | ForEach-Object { Write-Host "    файл:      $_" }
         $postTw | ForEach-Object { Write-Host "    после:     $($_.Name)" }
         if ($newName) { Write-Host "    имя:       $newName" }
         Write-Host ''
@@ -233,10 +230,10 @@ try {
         }
     }
 
-    # ---------- 3б. файлы с Диска ----------
-    if ($sel.Files.Count -or $sel.FilesAsk) {
-        Write-Step 'Файлы с Диска (pc-base-exe)'
-        Copy-ExeToDesktop -Names $sel.Files -Ask:($sel.FilesAsk -and -not $sel.Files.Count)
+    # ---------- 3б. файлы из «Моих данных» ----------
+    if ($sel.Files.Count) {
+        Write-Step 'Файлы из «Моих данных»'
+        Save-PbFiles -Names $sel.Files
     }
 
     # ---------- 4. среда ----------
@@ -244,13 +241,6 @@ try {
         Write-Step 'Среда'
         if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { [void](Initialize-Winget) }
         foreach ($t in $postTw) { Invoke-Tweak $t }
-    }
-
-    if ($script:PB.DriveInstalledNow) {
-        if ((Read-Host '  Google Drive устанавливался только для pc-base-exe. Удалить его с этого компьютера? [y/N]') -match '^[yYнН]') {
-            & winget uninstall --id Google.GoogleDrive -e --silent --disable-interactivity
-            Write-Ok 'Google Drive удалён'
-        }
     }
 
     # ---------- 5. имя ПК ----------

@@ -28,12 +28,12 @@ namespace PcBase
         public string Tone { get; set; }
     }
 
-    // пункт каталога: программа (app), настройка (tweak), файл с Диска (file), «выбрать при прогоне» (ask)
+    // пункт каталога: программа (app), настройка (tweak), файл из релиза files «Моих данных» (file)
     public class Item : Bindable
     {
         public Item() { Facts = new List<Fact>(); }
 
-        public string Key { get; set; }          // app:<id>, tweak:<id>, file:<имя>, files:ask
+        public string Key { get; set; }          // app:<id>, tweak:<id>, file:<имя ассета>
         public string Kind { get; set; }
         public string Id { get; set; }
         public string Name { get; set; }
