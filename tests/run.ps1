@@ -562,7 +562,7 @@ try {
     $t3 = New-PbSelfRemoveScript @('data') 4321
     $script:PB.Root = $saveRoot; $script:PB.DataRoot = $saveData
     $pe = $null; [void][Management.Automation.Language.Parser]::ParseInput($t1, [ref]$null, [ref]$pe)
-    Check 'удаление: скрипт разбирается; всё выбранное — в нём; ждёт процесс' (-not $pe.Count -and $t1.Contains([regex]::Escape($own).Replace('\', '')) -or $t1.Contains($own)) $pe
+    Check 'удаление: скрипт разбирается; всё выбранное — в нём; ждёт процесс' (-not $pe.Count -and $t1.Contains($own) -and $t1.Contains('Get-Process -Id 4321') -and $t1.Contains('Git.Git')) $pe
     Check 'удаление: без отметок — только программа, без выхода из GitHub и удаления Git' ($t2 -match 'if \(\$False\) \{\s+if \(Get-Command gh' -and -not $t2.Contains($own) -and $t2.Contains('Get-Process -Id 4321'))
     Check 'удаление: чужой репозиторий в -DataRoot не удаляется' (-not $t3.Contains($alienRepo))
 
