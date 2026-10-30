@@ -11,7 +11,7 @@
 # Ключи:
 #   -Selection <имя|путь>   открыть окно с сохранением: путь к .json, имя из Моих данных или локальных сохранений
 #   -NoPull                 не подтягивать свежую версию из git
-#   -DryRun                 открыть окно в режиме «только показать план» (он и так по умолчанию)
+#   -DryRun                 с -Console: только показать план, не спрашивая о применении
 #   -DataRoot <папка>       где лежат свои данные, если не в C:\tabula-rasa-private
 #   -Console                план и прогон — в консоли, как раньше (для отладки); по умолчанию — в окне
 #   -Spawned                служебный: так setup.ps1 запускает сам себя скрытым процессом
@@ -299,20 +299,18 @@ try {
     }
     # список файлов окно получает само, в фоне: из релиза files «Моих данных». Заставка закрывается, когда окно показано
     Set-PbSplash 'Подготовка окна…' 0.85
-    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain -RunInWindow (-not $Console)
+    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -IsDomain $script:PB.IsDomain -RunInWindow (-not $Console)
     if ($script:PB.WindowShownSec) { Write-Host "  Окно открылось через $($script:PB.WindowShownSec) с после запуска." -ForegroundColor DarkGray }
     # план, прогон и итог прошли в окне (lib\gui.ps1 + lib\run.ps1): журнал прогона — logs\run_<дата>.log
     if ($sel -and $sel.RanInWindow) { $windowMode = $true; return }
     if (-not $sel) { Write-Host '  Отменено.'; return }
 
-    # -Console: тот же план и прогон (lib\run.ps1), вывод — в консоль
+    # -Console: тот же план и прогон (lib\run.ps1), вывод — в консоль; применение — после подтверждения
     $plan = Get-PbRunPlan $sel $Apps $Tweaks $null
-    if ($sel.DryRun) {
-        Write-PbPlan $plan
-        Write-Host ''
-        Write-Host '  Показан только план, изменения не вносились. Чтобы применить их, выберите внизу окна режим «Применить».' -ForegroundColor Yellow
-        return
-    }
+    Write-PbPlan $plan
+    Write-Host ''
+    if ($DryRun) { Write-Host '  Показан только план (-DryRun), изменения не вносились.' -ForegroundColor Yellow; return }
+    if ((Read-Host '  Применить план? [y/N]') -notmatch '^[yYнН]') { Write-Host '  Изменения не вносились.' -ForegroundColor Yellow; return }
     Invoke-PbRun $plan $sel $Apps $Tweaks $null
 }
 catch {

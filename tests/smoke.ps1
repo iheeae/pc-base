@@ -38,7 +38,7 @@ $watch.add_Tick({
 })
 $watch.Start()
 try {
-    $r = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Notices @('Проверка окна') -DryRun $true -IsDomain $false -RunInWindow $true
+    $r = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Notices @('Проверка окна') -IsDomain $false -RunInWindow $true
     Write-Host "Окно закрылось через $([int]$sw.Elapsed.TotalSeconds) с"
 } catch {
     $fail += "окно упало: $($_.Exception.Message) $($_.ScriptStackTrace)"

@@ -639,20 +639,12 @@
                            ToolTip="Компьютер в домене: переименование требует доменной учётной записи, поэтому имя не меняется">
                     <Run Text="Имя ПК:"/> <Run x:Name="PcNameCur" FontWeight="SemiBold"/><Run Text="  ·  в домене, не меняется" Foreground="{DynamicResource TextMuted}"/>
                 </TextBlock>
-                <TextBlock Grid.Column="2" Text="Режим" VerticalAlignment="Center" Margin="16,0,8,0"/>
-                <Border Grid.Column="3" Height="32" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
-                        Background="{DynamicResource Control}">
-                    <StackPanel Orientation="Horizontal">
-                        <RadioButton x:Name="ModePlan" GroupName="Mode" Style="{StaticResource Segment}" Content="План" Height="30" Padding="12,0"
-                                     ToolTip="Показать, что будет сделано, без изменений в системе"/>
-                        <RadioButton x:Name="ModeApply" GroupName="Mode" Style="{StaticResource Segment}" Content="Применить" Height="30" Padding="12,0"
-                                     ToolTip="Применить изменения. Перед запуском запрашивается подтверждение"/>
-                    </StackPanel>
-                </Border>
+                <!-- переключателя «План / Применить» нет: сначала всегда план, применение — кнопкой «Применить…» на экране плана -->
                 <TextBlock x:Name="Summary" Grid.Column="4" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="16,0,16,0"
                            TextTrimming="CharacterEllipsis"/>
                 <Button x:Name="SaveBtn" Grid.Column="5" Content="Сохранить…" Margin="0,0,8,0" ToolTip="Сохранить текущие галочки (Ctrl+S)"/>
-                <Button x:Name="OkBtn" Grid.Column="6" MinWidth="152" IsDefault="False"/>
+                <Button x:Name="OkBtn" Grid.Column="6" MinWidth="152" IsDefault="False" Content="Показать план" Style="{StaticResource AccentButton}"
+                        ToolTip="Показать, что будет сделано. Изменения применяются кнопкой «Применить…» на экране плана после подтверждения"/>
             </Grid>
         </Border>
     </Grid>
