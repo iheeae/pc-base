@@ -407,8 +407,8 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <CheckBox Focusable="False" IsChecked="{Binding IsChecked, Mode=TwoWay}" HorizontalAlignment="Center"
-                                      ToolTip="Отметить (пробел)"/>
+                            <CheckBox x:Name="Check" Focusable="False" IsChecked="{Binding IsChecked, Mode=TwoWay}" IsEnabled="{Binding CanToggle}"
+                                      HorizontalAlignment="Center" ToolTip="Отметить (пробел)" ToolTipService.ShowOnDisabled="True"/>
                             <!-- плитка программы: значок из exe, если установлена, иначе монограмма -->
                             <Grid Grid.Column="1" Width="32" Height="32" Margin="4,0,4,0" VerticalAlignment="Center"
                                   Visibility="{Binding HasTile, Converter={StaticResource Vis}}">
@@ -438,6 +438,11 @@
                                         ToolTip="Не отменяется через undo.ps1, только точкой восстановления">
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
                                 </Border>
+                                <!-- действие над установленной (Э7): будет обновлена / переустановка / будет удалена -->
+                                <Border x:Name="ActionPill" Style="{StaticResource Pill}" Visibility="{Binding HasAction, Converter={StaticResource Vis}}"
+                                        Background="{DynamicResource AccentSoft}">
+                                    <TextBlock x:Name="ActionText" Text="{Binding ActionText}" VerticalAlignment="Center" Foreground="{DynamicResource AccentText}"/>
+                                </Border>
                                 <!-- статус на этом компьютере: установлено / обновление / не установлено; у твиков — применено -->
                                 <Border x:Name="StatusPill" Style="{StaticResource Pill}" Visibility="{Binding HasStatus, Converter={StaticResource Vis}}">
                                     <TextBlock x:Name="StatusText" Text="{Binding StatusText}" VerticalAlignment="Center"/>
@@ -464,6 +469,13 @@
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusKind}" Value="installed">
                             <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource TextMuted}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsLocked}" Value="True">
+                            <Setter TargetName="Check" Property="ToolTip" Value="Программа установлена. Действия с ней (обновить, переустановить, удалить, применить мои настройки) — в подробностях справа"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Action}" Value="remove">
+                            <Setter TargetName="ActionPill" Property="Background" Value="{DynamicResource DangerSoft}"/>
+                            <Setter TargetName="ActionText" Property="Foreground" Value="{DynamicResource Danger}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding StatusKind}" Value="applied">
                             <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource TextMuted}"/>

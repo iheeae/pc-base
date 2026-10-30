@@ -258,7 +258,7 @@ function New-AppItem ($A, [string]$CatKey, [string]$Cat) {
     $it.Key = 'app:' + $A.Id; $it.Kind = 'app'; $it.Id = $A.Id; $it.Name = $A.Name
     $it.Desc = $A.Desc; $it.FullDesc = $A.Desc
     $it.CatKey = $CatKey; $it.CatName = "Программы · $Cat"; $it.GroupTitle = $it.CatName
-    $it.Interactive = [bool]$A.Interactive; $it.IsWeb = $A.Source -eq 'web'; $it.OpenSource = [bool]$A.OpenSource; $it.IsMine = [bool]$A.Mine
+    $it.Interactive = [bool]$A.Interactive; $it.IsWeb = $A.Source -eq 'web'; $it.CanRemove = $A.Source -eq 'winget'; $it.OpenSource = [bool]$A.OpenSource; $it.IsMine = [bool]$A.Mine
     $it.HasTile = $true; $it.Monogram = ([string]$A.Name).Substring(0, 1).ToUpper(); $it.MonoBrush = Get-MonoBrush $A.Id
     if ($A.Config -and $A.Config.Import) {
         $it.HasConfig = $true; $it.ConfigName = 'с моими настройками'; $it.ConfigFile = $A.Config.File
@@ -659,20 +659,25 @@ function Show-SelectionDialog {
     function Test-Visible ($o) {
         if (-not (Test-StatusFilter $o)) { return $false }
         if ($ui.Mode -eq 'search') { return (Test-Search $o) }
-        if ($ui.Mode -eq 'summary') { return $o.IsChecked }
+        if ($ui.Mode -eq 'summary') { return $o.IsPicked }
         return $o.CatKey -eq $ui.Cat
     }
     $view.Filter = [Predicate[object]]{ param($o) Test-Visible $o }
 
-    function Get-Chosen {
+    # выбор для прогона: IsPicked — установленная (IsLocked) входит, только если с ней что-то делается.
+    # -ForSave — для сохранения: всё отмеченное, включая установленные (набор переносится на другие компьютеры)
+    function Get-Chosen ([switch]$ForSave) {
         $on = @{}
-        foreach ($it in $items) { if ($it.IsChecked) { $on[$it.Key] = $it } }
+        foreach ($it in $items) { if (($ForSave -and $it.IsChecked) -or (-not $ForSave -and $it.IsPicked)) { $on[$it.Key] = $it } }
+        $appIn = { param($A) $o = $on['app:' + $A.Id]; $o -and ($ForSave -or -not $o.IsLocked -or $o.Action -in 'update', 'reinstall') }
         return @{
-            Apps     = @($appList | Where-Object { $on.ContainsKey('app:' + $_.Id) } | ForEach-Object { $_.Id })
+            Apps     = @($appList | Where-Object { & $appIn $_ } | ForEach-Object { $_.Id })
             Configs  = @($appList | Where-Object { $_.Config -and $_.Config.Import -and $on.ContainsKey('app:' + $_.Id) -and $on['app:' + $_.Id].ConfigOn } | ForEach-Object { $_.Id })
             Tweaks   = @($Tweaks | Where-Object { $on.ContainsKey('tweak:' + $_.Id) } | ForEach-Object { $_.Id })
-            # отмеченные программы со статусом «есть обновление» — обновить через winget (Install-WingetApp)
-            Upgrades = @($items | Where-Object { $_.Kind -eq 'app' -and $_.IsChecked -and $_.StatusKind -eq 'update' } | ForEach-Object { $_.Id })
+            # действия над установленными (Э7): обновить, переустановить, удалить
+            Upgrades = @($items | Where-Object { -not $ForSave -and $_.Kind -eq 'app' -and $_.IsLocked -and $_.Action -eq 'update' } | ForEach-Object { $_.Id })
+            Reinstall = @($items | Where-Object { -not $ForSave -and $_.Kind -eq 'app' -and $_.IsLocked -and $_.Action -eq 'reinstall' } | ForEach-Object { $_.Id })
+            Remove   = @($items | Where-Object { -not $ForSave -and $_.Kind -eq 'app' -and $_.IsLocked -and $_.Action -eq 'remove' } | ForEach-Object { $_.Id })
             # пока списка нет, файлы из сохранения не теряются: они уйдут и в новое сохранение, и в прогон
             Files    = @(@($items | Where-Object { $_.Kind -eq 'file' -and $_.IsChecked } | ForEach-Object { $_.Id }) + @($ui.WantFiles) | Sort-Object -Unique)
         }
@@ -683,7 +688,7 @@ function Show-SelectionDialog {
         $sel = @{}; $tot = @{}; $n = 0
         foreach ($it in $items) {
             $tot[$it.CatKey]++
-            if ($it.IsChecked) { $sel[$it.CatKey]++; $n++ }
+            if ($it.IsPicked) { $sel[$it.CatKey]++; $n++ }
         }
         foreach ($k in $cats.Keys) {
             $s = [int]$sel[$k]; $t = [int]$tot[$k]
@@ -848,7 +853,7 @@ function Show-SelectionDialog {
 
     function Save-Current {
         if (Test-DataBusy) { return }
-        $c = Get-Chosen
+        $c = Get-Chosen -ForSave
         $where = if (Test-PbDataConnected) { "Сохранение будет записано в «Мои данные» ($($script:PB.DataRoot)) и отправлено в GitHub. Оно станет доступно на всех компьютерах." }
                  else { "Сохранение будет записано на этом компьютере ($(Get-PbLocalSaveDir)). После подключения «Моих данных» его можно перенести." }
         $def = if ($ui.SaveName) { $ui.SaveName } else { 'Мой набор' }
@@ -1471,7 +1476,7 @@ function Show-SelectionDialog {
     $onChange = {
         param($s, $e)
         if ($ui.Bulk) { return }
-        if ($e.PropertyName -eq 'IsChecked' -or $e.PropertyName -eq 'ConfigOn') { Update-Counts }
+        if ($e.PropertyName -in 'IsChecked', 'ConfigOn', 'IsPicked') { Update-Counts }
     }
     foreach ($it in $items) { $it.add_PropertyChanged($onChange) }
 
@@ -1552,7 +1557,10 @@ function Show-SelectionDialog {
     $ctl.FilterUpdates.add_Click({ Update-View; Update-NavHits })
     $ctl.MarkUpdates.add_Click({
         $up = @($items | Where-Object { $_.Kind -eq 'app' -and $_.StatusKind -eq 'update' })
-        Set-Checked $up $true
+        $ui.Bulk = $true
+        foreach ($it in $up) { $it.Action = 'update' }
+        $ui.Bulk = $false
+        Update-Counts
         Show-Notice "Отмечено обновлений: $($up.Count). Программы будут обновлены через winget."
     })
 
@@ -1663,6 +1671,8 @@ function Show-SelectionDialog {
                 if ($it.Kind -ne 'app' -or -not $s.Apps.ContainsKey($it.Id)) { continue }
                 $st = $s.Apps[$it.Id]
                 if ($it.StatusKind -ne $st.Kind -or $it.StatusText -ne $st.Text) { $it.StatusKind = $st.Kind; $it.StatusText = $st.Text }
+                # Э7: установленная — отмечена и заблокирована; не установлена — снова свободна; unknown — как было
+                if ($st.Kind -in 'installed', 'update') { $it.IsLocked = $true } elseif ($st.Kind -eq 'missing') { $it.IsLocked = $false }
                 if ($st.Icon -and -not $it.IconSource -and -not $ui.IconTried[$it.Id]) { $ui.IconTried[$it.Id] = $true; $it.IconSource = Get-ExeIcon $st.Icon }
             }
             $ui.Status.Apps = $s.Apps
@@ -1711,10 +1721,10 @@ function Show-SelectionDialog {
         try { [void]$j.Ps.EndInvoke($j.Handle) } catch { $j.Sync.WingetError = $_.Exception.Message }
         $j.Ps.Dispose()
         Set-ItemStatuses
-        $apps = @($items | Where-Object { $_.Kind -eq 'app' })
-        $inst = @($apps | Where-Object { $_.StatusKind -in 'installed', 'update' }).Count
-        $up = @($apps | Where-Object { $_.StatusKind -eq 'update' }).Count
-        $ctl.StatusScan.Text = if ($j.Sync.WingetError) { "Установлено: $inst. Обновления не проверены: $($j.Sync.WingetError)." } else { "Установлено: $inst из $($apps.Count), обновлений: $up." }
+        $appItems = @($items | Where-Object { $_.Kind -eq 'app' })
+        $inst = @($appItems | Where-Object { $_.StatusKind -in 'installed', 'update' }).Count
+        $up = @($appItems | Where-Object { $_.StatusKind -eq 'update' }).Count
+        $ctl.StatusScan.Text = if ($j.Sync.WingetError) { "Установлено: $inst. Обновления не проверены: $($j.Sync.WingetError)." } else { "Установлено: $inst из $($appItems.Count), обновлений: $up." }
         Update-View
     })
 
@@ -1764,7 +1774,7 @@ function Show-SelectionDialog {
             return $null
         }
         $c = Get-Chosen
-        if (-not $c.Apps.Count -and -not $c.Tweaks.Count -and -not $c.Files.Count -and -not $name) {
+        if (-not $c.Apps.Count -and -not $c.Tweaks.Count -and -not $c.Files.Count -and -not $c.Configs.Count -and -not @($c.Remove).Count -and -not $name) {
             [void](Show-UiMessage -Owner $win -Title 'Ничего не выбрано' -Lines @('Отметьте хотя бы одну программу, настройку или файл либо укажите новое имя компьютера.'))
             return $null
         }
@@ -1776,7 +1786,8 @@ function Show-SelectionDialog {
     # подтверждение перед применением: счётчики, список необратимого, имя компьютера
     function Confirm-Apply ($C) {
         $irr = @($Tweaks | Where-Object { $_.Irreversible -and $C.Tweaks -contains $_.Id } | ForEach-Object { $_.Name })
-        $lines = @("Программ: $($C.Apps.Count)$(if ($C.Upgrades.Count) { ", из них обновлений: $($C.Upgrades.Count)" })$(if ($C.Configs.Count) { ", с моими настройками: $($C.Configs.Count)" })",
+        $irr += @($appList | Where-Object { @($C.Remove) -contains $_.Id } | ForEach-Object { "Удалить программу $($_.Name)" })
+        $lines = @("Программ: $($C.Apps.Count)$(if ($C.Upgrades.Count) { ", из них обновлений: $($C.Upgrades.Count)" })$(if (@($C.Reinstall).Count) { ", переустановок: $(@($C.Reinstall).Count)" })$(if ($C.Configs.Count) { ", с моими настройками: $($C.Configs.Count)" })$(if (@($C.Remove).Count) { ", удалить: $(@($C.Remove).Count)" })",
             "Настроек Windows: $($C.Tweaks.Count)")
         if ($irr.Count) {
             $lines += @{ Text = "Необратимые изменения ($($irr.Count)). Они не отменяются через undo.ps1, только точкой восстановления:"; Tone = 'danger'; Gap = $true }
@@ -1930,10 +1941,11 @@ function Show-SelectionDialog {
     function Get-RetryChoice {
         $keys = @($runSteps | Where-Object { $_.State -eq 'error' } | ForEach-Object { $_.Key })
         $p = $ui.LastSel
-        $sel = @{ Apps = @(); Tweaks = @(); Configs = @(); Files = @(); FileTitles = @(); Name = $null; Upgrades = @($p.Upgrades) }
+        $sel = @{ Apps = @(); Tweaks = @(); Configs = @(); Files = @(); FileTitles = @(); Name = $null; Upgrades = @($p.Upgrades); Reinstall = @($p.Reinstall); Remove = @() }
         foreach ($k in $keys) {
             switch -Regex ($k) {
                 '^app:(.+)$' { $sel.Apps += $Matches[1] }
+                '^remove:(.+)$' { $sel.Remove += $Matches[1] }
                 '^tweak:(.+)$' { $sel.Tweaks += $Matches[1] }
                 '^config:(.+)$' { $sel.Configs += $Matches[1] }
                 '^files$' { $sel.Files = @($p.Files); $sel.FileTitles = @($p.FileTitles) }

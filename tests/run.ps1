@@ -419,6 +419,30 @@ try {
         $r = @($script:PB.Results | ForEach-Object { "$($_.'Что')=$($_.'Статус')/$($_.'Детали')" }) -join ' | '
         Check 'программы: уже установлено (версия), обновлено (было → стало), новее нет, установлено (версия)' (
             $r -eq 'П1=уже установлено/версия 1.2 | П2=обновлено/1.0 → 1.1 | П3=уже установлено/версия 3.0, новее нет | П4=установлено/версия 2.0') $r
+        # Э7: переустановка (--force) и удаление
+        $script:WgCalls = New-Object System.Collections.ArrayList
+        function Invoke-PbWingetTimed ($WingetArgs) {
+            [void]$script:WgCalls.Add(($WingetArgs -join ' '))
+            if ($WingetArgs[0] -eq 'list') {
+                $v = $script:Ver[$WingetArgs[2]]
+                if (-not $v) { return @{ Code = -1978335212; Out = @() } }
+                return @{ Code = 0; Out = @('Name    Id       Version  Available Source', '-----------------------------------------', ('Prog    {0,-8} {1,-8} {2,-9} winget' -f $WingetArgs[2], $v[0], $v[1])) }
+            }
+            if ($WingetArgs[0] -eq 'uninstall') { if ($script:Code -eq 0) { $script:Ver.Remove($WingetArgs[2]) }; return @{ Code = $script:Code; Log = 'x.log' } }
+            if ($script:Code -eq 0) { $script:Ver[$WingetArgs[2]] = @($script:NewVer, '') }
+            return @{ Code = $script:Code; Log = 'x.log' }
+        }
+        $script:PB.Results.Clear(); $script:PB.Reinstall = @('r1'); $script:Code = 0; $script:NewVer = '5.0'
+        $script:Ver['A.Re'] = @('5.0', ''); $script:Ver['A.Rm'] = @('2.1', '')
+        Install-WingetApp @{ Id = 'r1'; Name = 'П5'; WingetId = 'A.Re' } 6>$null
+        Uninstall-WingetApp @{ Id = 'd1'; Name = 'П6'; Source = 'winget'; WingetId = 'A.Rm' } 6>$null
+        Uninstall-WingetApp @{ Id = 'd2'; Name = 'П7'; Source = 'winget'; WingetId = 'A.None' } 6>$null
+        Uninstall-WingetApp @{ Id = 'd3'; Name = 'П8'; Source = 'web' } 6>$null
+        $r = @($script:PB.Results | ForEach-Object { "$($_.'Что')=$($_.'Статус')/$($_.'Детали')" }) -join ' | '
+        Check 'Э7: переустановка с --force, удаление, «не установлена», удаление не из winget — ошибка' (
+            $r -eq 'П5=переустановлено/версия 5.0 | Удалить: П6=удалено/версия 2.1 | Удалить: П7=уже было/не установлена | Удалить: П8=ОШИБКА/удаление доступно только для программ из winget' -and
+            @($script:WgCalls | Where-Object { $_ -match '^install --id A.Re .*--force' }).Count -eq 1 -and @($script:WgCalls | Where-Object { $_ -match '^uninstall --id A.Rm' }).Count -eq 1) $r
+        $script:PB.Reinstall = @()
     }
     $script:PB.Upgrades = @(); $script:PB.Actions.Clear(); $script:PB.Manual.Clear()
 
@@ -483,6 +507,10 @@ try {
         Check 'отчёт: «Было настроено до прогона», «Уже было: 1», раскрывающиеся «было → стало»' ($same -match 'Тёмная тема' -and $same -notmatch 'Телеметрия' -and $h3 -match 'Уже было: 1' -and
             $h3 -match '<summary>изменено 1 из 2</summary>' -and $h3 -match 'нет → <b>1</b>' -and $h3 -match 'отключена <span class="muted">\(уже было\)' -and $h3 -match 'beforeprint') ($h3.Length)
     } finally { foreach ($k in $saveEnv.Keys) { Set-Item "env:$k" $saveEnv[$k] } }
+    $pr = Get-PbRunPlan @{ Apps = @('a1'); Tweaks = @(); Configs = @('a3'); Files = @(); Reinstall = @('a1'); Remove = @('a2') } $aps $tws $null
+    $k = ($pr | ForEach-Object { "$($_.Kind):$($_.Name)" }) -join ' | '
+    Check 'Э7: план — удаление первым в программах и необратимо, переустановка, настройки без установки' (
+        $k -eq 'restore:Создать точку восстановления | remove:Удалить: Прог 2 | app:Переустановить: Прог 1 | config:Прог 3: с моими настройками' -and $pr[1].Irreversible -and $pr[1].Phase -eq 3) $k
     $plan2 = Get-PbRunPlan $sel $aps $tws $null
     $sync2 = [hashtable]::Synchronized(@{ StopAfter = $true })
     Invoke-PbRun $plan2 $sel $aps $tws $sync2 6>$null | Out-Null
@@ -495,6 +523,15 @@ try {
     '[{"Kind":"Reg"}]' | Set-Content (Join-Path $script:PB.LogDir 'changes_2026-10-30_090000.json')
     $logs = @(Get-PbChangeLogs)
     Check 'журналы для отката: новые первыми, дата из имени, число записей' ($logs.Count -eq 2 -and $logs[0].Count -eq 1 -and $logs[1].Date -eq [datetime]'2026-10-01 10:15:00' -and $logs[1].Count -eq 2) ($logs | ConvertTo-Json)
+
+    # ---------- Э7: другая сборка — тоже установлена ----------
+    Write-Host 'другая сборка'
+    $ent = @(@{ Name = 'Notepad++ (64-bit x64)'; Version = '8.6' })
+    $s1 = Get-PbAppStatusCore @{ Name = 'Notepad++'; Source = 'winget'; WingetId = 'Notepad++.Notepad++' } $ent @{}
+    $s2 = Get-PbAppStatusCore @{ Name = 'Windows Terminal'; Source = 'winget'; WingetId = 'Microsoft.WindowsTerminal'; Appx = 'Microsoft.WindowsTerminal' } @() @{} @{ 'Microsoft.WindowsTerminal' = '1.21.2911.0' }
+    $s3 = Get-PbAppStatusCore @{ Name = 'Notepad++'; Source = 'winget'; WingetId = 'Notepad++.Notepad++' } $ent $null
+    Check 'статус: MSI не через winget, из Microsoft Store, до ответа winget — просто установлено' ($s1.Kind -eq 'installed' -and $s1.Text -eq 'установлено не через winget · 8.6' -and
+        $s2.Kind -eq 'installed' -and $s2.Text -eq 'установлено из Microsoft Store · 1.21.2911.0' -and $s3.Text -eq 'установлено · 8.6') @($s1.Text, $s2.Text, $s3.Text)
 
     # ---------- заставка ----------
     Write-Host 'заставка'

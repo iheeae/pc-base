@@ -5,6 +5,16 @@
 # из winget «не установлено» не говорится: в реестре их название бывает другим. Программы с сайта — только по реестру.
 # Твики — Get-PbTweakStatus (lib\common.ps1): Apply в режиме проверки, ничего не меняется.
 
+# пакеты Microsoft Store из поля Appx каталога, установленные у текущего пользователя: @{ <имя> = версия }
+function Get-PbAppxInstalled ($Apps) {
+    $out = @{}
+    foreach ($n in @($Apps | Where-Object { $_.Appx } | ForEach-Object { $_.Appx } | Select-Object -Unique)) {
+        $p = Get-AppxPackage -Name $n -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($p) { $out[$n] = [string]$p.Version }
+    }
+    return $out
+}
+
 # установленные программы: @{ Name; Version } из HKLM (64 и 32 бит) и HKCU, без системных компонентов
 function Get-PbUninstallEntries {
     $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -47,15 +57,16 @@ function Get-PbWingetInstalled {
 }
 
 # @{ Kind = installed | update | missing | unknown; Text; Version; Available; Icon (DisplayIcon из реестра) }.
-# $Winget = $null — winget ещё не ответил
-function Get-PbAppStatus ($App, $Entries, $Winget) {
-    $st = Get-PbAppStatusCore $App $Entries $Winget
+# $Winget = $null — winget ещё не ответил. $Appx — Get-PbAppxInstalled.
+# Другая сборка (MSI с сайта, Store) — тоже «установлено», с пометкой: в окне она блокируется так же (Э7)
+function Get-PbAppStatus ($App, $Entries, $Winget, $Appx) {
+    $st = Get-PbAppStatusCore $App $Entries $Winget $Appx
     $reg = Find-PbUninstallEntry $App $Entries
     if ($reg -and $reg.Icon -and $st.Kind -in 'installed', 'update') { $st.Icon = $reg.Icon }
     return $st
 }
 
-function Get-PbAppStatusCore ($App, $Entries, $Winget) {
+function Get-PbAppStatusCore ($App, $Entries, $Winget, $Appx) {
     $reg = Find-PbUninstallEntry $App $Entries
     $w = $null
     if ($Winget -and $App.WingetId) { $w = $Winget[$App.WingetId.ToLower()] }
@@ -63,7 +74,12 @@ function Get-PbAppStatusCore ($App, $Entries, $Winget) {
         if ($w.Available) { return @{ Kind = 'update'; Text = "обновление: $($w.Version) → $($w.Available)"; Version = $w.Version; Available = $w.Available } }
         return @{ Kind = 'installed'; Text = $(if ($w.Version -and $w.Version -ne 'Unknown') { "установлено · $($w.Version)" } else { 'установлено' }); Version = $w.Version }
     }
-    if ($reg) { return @{ Kind = 'installed'; Text = $(if ($reg.Version) { "установлено · $($reg.Version)" } else { 'установлено' }); Version = $reg.Version } }
+    $how = if ($null -ne $Winget -and $App.Source -eq 'winget') { 'установлено не через winget' } else { 'установлено' }
+    if ($reg) { return @{ Kind = 'installed'; Text = $(if ($reg.Version) { "$how · $($reg.Version)" } else { $how }); Version = $reg.Version; Other = ($how -ne 'установлено') } }
+    if ($App.Appx -and $Appx -and $Appx.ContainsKey($App.Appx)) {
+        $v = $Appx[$App.Appx]
+        return @{ Kind = 'installed'; Text = "установлено из Microsoft Store$(if ($v) { " · $v" })"; Version = $v; Other = $true }
+    }
     if ($null -ne $Winget -or $App.Source -eq 'web') { return @{ Kind = 'missing'; Text = 'не установлено' } }
     return @{ Kind = 'unknown'; Text = '' }
 }
@@ -73,8 +89,10 @@ $script:PbTweakStatusText = @{ applied = 'применено'; partial = 'при
 # фоновая задача окна: $Sync.Apps (после реестра, затем после winget), $Sync.Tweaks, $Sync.WingetError, $Sync.Done
 function Start-PbStatusScan ($Apps, $Tweaks, $Sync) {
     $entries = @(Get-PbUninstallEntries)
+    $appx = @{}
+    try { $appx = Get-PbAppxInstalled $Apps } catch { }
     $first = @{}
-    foreach ($a in $Apps) { $first[$a.Id] = Get-PbAppStatus $a $entries $null }
+    foreach ($a in $Apps) { $first[$a.Id] = Get-PbAppStatus $a $entries $null $appx }
     $Sync.Apps = $first
     $tw = @{}
     foreach ($t in $Tweaks) { $tw[$t.Id] = Get-PbTweakStatus $t }
@@ -82,7 +100,7 @@ function Start-PbStatusScan ($Apps, $Tweaks, $Sync) {
     try {
         $wg = Get-PbWingetInstalled
         $full = @{}
-        foreach ($a in $Apps) { $full[$a.Id] = Get-PbAppStatus $a $entries $wg }
+        foreach ($a in $Apps) { $full[$a.Id] = Get-PbAppStatus $a $entries $wg $appx }
         $Sync.Apps = $full
     } catch { $Sync.WingetError = $_.Exception.Message }
     $Sync.Done = $true
