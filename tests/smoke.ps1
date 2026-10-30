@@ -45,12 +45,15 @@ try {
 }
 $watch.Stop()
 if ($script:SmokeTimeout) { $fail += "окно не закрылось само за 300 с. Сторож:`n" + (($script:WatchLog | Select-Object -Last 25) -join "`n") }
+if ($env:TR_SMOKE_STEP -like 'ошибка*') { $fail += $env:TR_SMOKE_STEP }
+elseif ($env:TR_SMOKE_STEP -ne 'закрытие') { $fail += "проверка окна остановилась на шаге «$env:TR_SMOKE_STEP»" }
 foreach ($f in @(Get-ChildItem $script:PB.LogDir -Filter 'ui-error_*.txt' -ErrorAction SilentlyContinue)) {
     $fail += "ошибка в окне: " + (Get-Content $f.FullName -Raw -Encoding UTF8)
 }
 $own = @($Error | Where-Object { $_.InvocationInfo -and $_.InvocationInfo.ScriptName -match '[\\/](lib|catalog)[\\/]' } |
     ForEach-Object { "$($_.Exception.Message) @ $(Split-Path $_.InvocationInfo.ScriptName -Leaf):$($_.InvocationInfo.ScriptLineNumber)" } | Select-Object -Unique)
 if ($own.Count) { Write-Host "Ошибки в журнале PowerShell ($($own.Count)):"; $own | ForEach-Object { Write-Host "  $_" } }
+if ($fail.Count -and $own.Count) { $fail += "ошибки PowerShell из lib:`n" + (($own | Select-Object -First 10) -join "`n") }
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($fail.Count) {

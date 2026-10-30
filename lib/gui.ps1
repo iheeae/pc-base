@@ -2280,32 +2280,45 @@ function Show-SelectionDialog {
         # проверка окна в CI (tests\smoke.ps1): дождаться статусов, пройти по разделам, показать план, закрыть
         if ($env:TR_SMOKE) {
             $ui.SmokeStart = Get-Date
-            $smoke = New-Object Windows.Threading.DispatcherTimer
-            $smoke.Interval = [TimeSpan]::FromSeconds(1)
-            $smoke.add_Tick({
-                $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
-                $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
-                $env:TR_SMOKE_STEP = "tick $([int]$sec) с, статусы $(if ($busy) { 'идут' } else { 'готовы' }), done=$([bool]$ui.SmokeDone)"
-                if ($busy -and $sec -lt 120) { return }
-                if (-not $ui.SmokeDone) {
-                    $ui.SmokeDone = $true
-                    Write-Host "  smoke: статусы готовы через $([int]$sec) с"
-                    foreach ($n in @($nav | Where-Object { $_.Kind -eq 'cat' })) { Select-Nav $n }
-                    $first = @($items | Where-Object { $_.Kind -eq 'app' } | Select-Object -First 1)
-                    if ($first) { $ctl.List.SelectedItem = $first[0] }
-                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
-                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
-                    $env:TR_SMOKE_STEP = 'план'
-                    $c = Get-RunChoice
-                    if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
-                    $env:TR_SMOKE_STEP = 'план показан'
-                    return
+            # таймер — в $ui: обработчик Tick выполняется позже, когда переменных этого обработчика уже нет
+            $ui.SmokeTimer = New-Object Windows.Threading.DispatcherTimer
+            $ui.SmokeTimer.Interval = [TimeSpan]::FromSeconds(1)
+            $ui.SmokeTimer.add_Tick({
+                try {
+                    $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
+                    $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
+                    if (-not $ui.SmokeDone) { $env:TR_SMOKE_STEP = "ожидание статусов, $([int]$sec) с" }
+                    if ($busy -and $sec -lt 120) { return }
+                    if (-not $ui.SmokeDone) {
+                        $ui.SmokeDone = $true
+                        Write-Host "  smoke: статусы готовы через $([int]$sec) с"
+                        $env:TR_SMOKE_STEP = 'разделы'
+                        foreach ($n in @($nav | Where-Object { $_.Kind -eq 'cat' })) { $env:TR_SMOKE_STEP = "раздел $($n.Name)"; Select-Nav $n }
+                        $env:TR_SMOKE_STEP = 'подробности'
+                        $first = @($items | Where-Object { $_.Kind -eq 'app' } | Select-Object -First 1)
+                        if ($first) { $ctl.List.SelectedItem = $first[0] }
+                        $env:TR_SMOKE_STEP = 'отметки'
+                        foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
+                        foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
+                        $env:TR_SMOKE_STEP = 'тема'
+                        $ctl.ThemeBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
+                        $ctl.ThemeBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
+                        $env:TR_SMOKE_STEP = 'план'
+                        $c = Get-RunChoice
+                        if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                        $env:TR_SMOKE_STEP = 'план показан'
+                        return
+                    }
+                    $ui.SmokeTimer.Stop()
+                    $env:TR_SMOKE_STEP = 'закрытие'
+                    $win.Close()
+                } catch {
+                    $env:TR_SMOKE_STEP = "ошибка на шаге «$env:TR_SMOKE_STEP»: $($_.Exception.Message) @ строка $($_.InvocationInfo.ScriptLineNumber)"
+                    $ui.SmokeTimer.Stop()
+                    $win.Close()
                 }
-                $smoke.Stop()
-                $env:TR_SMOKE_STEP = 'закрытие'
-                $win.Close()
             })
-            $smoke.Start()
+            $ui.SmokeTimer.Start()
         }
     })
 
