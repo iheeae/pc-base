@@ -25,6 +25,17 @@ $bad = foreach ($f in $files | Where-Object { $_ -match '\.(ps1|psd1)$' }) {
 }
 Report "синтаксис ($($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion))" $bad
 
+# [Тип]::Член в аргументах команды без скобок — это строка, а не значение (New-Object … [Windows.Media.Brushes]::Black
+# уронил окно в Э5). Нужно ([Тип]::Член)
+$bad = foreach ($f in $files | Where-Object { $_ -match '\.ps1$' }) {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $root $f), [ref]$null, [ref]$null)
+    $ast.FindAll({ $args[0] -is [Management.Automation.Language.StringConstantExpressionAst] -and $args[0].StringConstantType -eq 'BareWord' -and
+        $args[0].Value -match '^\[[\w.]+\]::' -and ($args[0].Parent -is [Management.Automation.Language.CommandAst] -or
+        ($args[0].Parent -is [Management.Automation.Language.ArrayLiteralAst] -and $args[0].Parent.Parent -is [Management.Automation.Language.CommandAst])) }, $true) |
+        ForEach-Object { "${f}:$($_.Extent.StartLineNumber): $($_.Value) — нужны скобки" }
+}
+Report 'аргументы команд: [Тип]::Член в скобках' $bad
+
 # каталог грузится, id уникальны
 $a = (Import-PowerShellDataFile (Join-Path $root 'catalog\apps.psd1')).Apps; . (Join-Path $root 'catalog\tweaks.ps1')
 Report 'каталог: id уникальны' (@($a.Id) + @($Tweaks.Id) | Group-Object | Where-Object Count -gt 1 | ForEach-Object { $_.Name })
@@ -36,6 +47,15 @@ Report 'твики: Apply, Os, Phase' (@($Tweaks | ForEach-Object {
     if (-not $_.Apply) { "$($_.Id): нет Apply" }
     if (-not $_.Os -or @($_.Os | Where-Object { $_ -notin '10', '11' }).Count) { "$($_.Id): Os" }
     if ($_.Phase -notin 'pre', 'post') { "$($_.Id): Phase" } }))
+
+# зависимости (Requires): только существующие id, без циклов
+$ids = @{}; foreach ($x in @(@($a) + @($Tweaks))) { $ids[$x.Id] = @($x.Requires | Where-Object { $_ }) }
+$bad = foreach ($k in $ids.Keys) {
+    foreach ($r in $ids[$k]) { if (-not $ids.ContainsKey($r)) { "${k}: Requires '$r' — нет такого id" } }
+    $seen = @{}; $stack = New-Object System.Collections.Stack; foreach ($r in $ids[$k]) { $stack.Push($r) }
+    while ($stack.Count) { $r = $stack.Pop(); if ($r -eq $k) { "${k}: циклическая зависимость"; break }; if ($seen[$r]) { continue }; $seen[$r] = $true; foreach ($n in @($ids[$r])) { $stack.Push($n) } }
+}
+Report 'каталог: зависимости (Requires) существуют, без циклов' $bad
 
 # тон текстов программы
 $tone = '(?<!\p{L})(ты|твой|твоя|твоё|твои|твоих|твоим|твоей|тебе|тебя|снести|снесёт|сносит|снос|репа|репы|репу|репе|бесплатно)(?!\p{L})'

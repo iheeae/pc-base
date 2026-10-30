@@ -28,6 +28,7 @@ foreach ($a in $apps) {
     $marks = @()
     if ($a.OpenSource) { $marks += 'открытый код' }
     if ($a.Config) { $marks += 'перенос настроек' }
+    if ($a.Requires) { $marks += 'требует: ' + (@($a.Requires | ForEach-Object { $r = $_; $n = @(@($apps) + @($Tweaks) | Where-Object { $_.Id -eq $r } | ForEach-Object { $_.Name }); if ($n) { $n[0] } else { $r } }) -join ', ') }
     if ($a.Os) { $marks += "только Windows $(@($a.Os) -join ', ')" }
     if ($a.License) { $marks += "условия: $($a.License)" }
     $desc = ConvertTo-MdCell $a.Desc

@@ -438,6 +438,11 @@
                                         ToolTip="Не отменяется через undo.ps1, только точкой восстановления">
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
                                 </Border>
+                                <!-- зависимость (Э8): отмечена, потому что нужна другой отмеченной программе -->
+                                <Border Style="{StaticResource Pill}" Visibility="{Binding HasNeededBy, Converter={StaticResource Vis}}"
+                                        ToolTip="Требуется для отмеченной программы">
+                                    <TextBlock Text="{Binding NeededByText}" VerticalAlignment="Center"/>
+                                </Border>
                                 <!-- действие над установленной (Э7): будет обновлена / переустановка / будет удалена -->
                                 <Border x:Name="ActionPill" Style="{StaticResource Pill}" Visibility="{Binding HasAction, Converter={StaticResource Vis}}"
                                         Background="{DynamicResource AccentSoft}">

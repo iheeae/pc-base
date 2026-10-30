@@ -151,7 +151,16 @@ function Initialize-Ui {
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
     # Application нужен, чтобы стили видели и всплывающие меню/подсказки; Run() не зовём, окна — через ShowDialog
     $app = [Windows.Application]::Current
-    if (-not $app) { $app = New-Object Windows.Application; $app.ShutdownMode = 'OnExplicitShutdown' }
+    if (-not $app) {
+        $app = New-Object Windows.Application; $app.ShutdownMode = 'OnExplicitShutdown'
+        # ошибка в обработчике окна (кнопка, таймер фоновой задачи) не роняет программу: запись в журнал, сообщение,
+        # окно остаётся открытым. Без этого исключение закрывало окно раньше, чем его можно было прочитать
+        $app.add_DispatcherUnhandledException({
+            param($sender, $e)
+            $e.Handled = $true
+            Write-PbUiError $e.Exception
+        })
+    }
     $theme = Get-UiTheme
     $res = New-Object Windows.ResourceDictionary
     $res.MergedDictionaries.Add((Read-Xaml 'theme.xaml'))
@@ -160,6 +169,36 @@ function Initialize-Ui {
     $theme.Icon = New-UiIcon $res
     $script:PbUiTheme = $theme
     return $theme
+}
+
+# ошибка окна: полный текст — в журнал выполнения и в logs\ui-error_<дата>.txt, коротко — системным сообщением
+# (оно не зависит от состояния WPF и ждёт нажатия). Повтор одной и той же ошибки не показывается
+function Write-PbUiError ($Exception) {
+    $ex = $Exception
+    while ($ex.InnerException -and ($ex -is [Management.Automation.MethodInvocationException] -or $ex -is [Reflection.TargetInvocationException])) { $ex = $ex.InnerException }
+    $where = ''
+    if ($ex -is [Management.Automation.RuntimeException] -and $ex.ErrorRecord) {
+        $r = $ex.ErrorRecord
+        $where = "$($r.InvocationInfo.PositionMessage)`r`n$($r.ScriptStackTrace)"
+    }
+    $text = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $($ex.GetType().FullName): $($ex.Message)`r`n$where`r`n$($Exception.ToString())`r`n"
+    Write-Host "  ОШИБКА ОКНА: $($ex.Message)" -ForegroundColor Red
+    Write-Host $where
+    $file = $null
+    try {
+        New-Item -ItemType Directory -Path $script:PB.LogDir -Force | Out-Null
+        $file = Join-Path $script:PB.LogDir "ui-error_$($script:PB.Stamp).txt"
+        [IO.File]::AppendAllText($file, $text + "`r`n", (New-Object Text.UTF8Encoding $false))
+    } catch { }
+    if (-not $script:PbUiErrors) { $script:PbUiErrors = @{} }
+    $key = $ex.Message
+    if ($script:PbUiErrors.ContainsKey($key)) { return }
+    $script:PbUiErrors[$key] = $true
+    if ($env:TR_SMOKE) { return }   # проверка окна в CI: без сообщений, ошибки читаются из файла
+    try {
+        [void][Windows.MessageBox]::Show("В окне Tabula Rasa произошла ошибка. Работа продолжается, но результат последнего действия может быть неполным.`n`n$($ex.Message)`n`nПодробности: $file",
+            'Tabula Rasa: ошибка', 'OK', 'Warning')
+    } catch { }
 }
 
 function New-UiWindow ([string]$Xaml, $Theme) {
@@ -440,7 +479,7 @@ function Set-UiBackdrop ($Win) {
 # размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
 function Get-UiStatePath { Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json' }
 function Read-UiState {
-    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
 }
 function Save-UiState ($Win, [string]$Nav) {
     try {
@@ -561,7 +600,7 @@ function Show-SelectionDialog {
     }
     function Measure-UiText ([string]$T) {
         $ft = New-Object Windows.Media.FormattedText $T, ([Globalization.CultureInfo]::CurrentUICulture), 'LeftToRight',
-            (New-Object Windows.Media.Typeface $win.FontFamily, 'Normal', 'Normal', 'Normal'), 14, [Windows.Media.Brushes]::Black
+            (New-Object Windows.Media.Typeface $win.FontFamily, 'Normal', 'Normal', 'Normal'), 14, ([Windows.Media.Brushes]::Black)
         return $ft.WidthIncludingTrailingWhitespace
     }
     $os = "Windows $($script:PB.Os)"
@@ -626,6 +665,34 @@ function Show-SelectionDialog {
         }
     }
 
+    # --- зависимости (Э8): поле Requires каталога. Отметил программу — нужное ей отмечается само (AutoAdded,
+    # с уведомлением); снял нужное — предупреждение; в сохранение пишется только отмеченное пользователем ---
+    $reqMap = @{}
+    foreach ($x in @(@($Apps) + @($Tweaks))) { if ($x.Requires) { $reqMap[$x.Id] = @($x.Requires) } }
+    $depItem = @{}
+    foreach ($it in $items) { if ($it.Kind -in 'app', 'tweak') { $depItem[$it.Id] = $it } }
+    function Get-ReqClosure ([string]$Id) {
+        $seen = @{}; $queue = New-Object System.Collections.Queue
+        foreach ($r in @($reqMap[$Id])) { if ($r) { $queue.Enqueue($r) } }
+        while ($queue.Count) {
+            $r = $queue.Dequeue()
+            if ($seen.ContainsKey($r) -or $r -eq $Id) { continue }
+            $seen[$r] = $true
+            foreach ($n in @($reqMap[$r])) { if ($n) { $queue.Enqueue($n) } }
+        }
+        return @($seen.Keys)
+    }
+    function Get-Dependents ([string]$Id) { @($reqMap.Keys | Where-Object { (Get-ReqClosure $_) -contains $Id } | ForEach-Object { $depItem[$_] } | Where-Object { $_ }) }
+    foreach ($id in @($reqMap.Keys)) {
+        $it = $depItem[$id]; if (-not $it) { continue }
+        $names = @($reqMap[$id] | ForEach-Object { $depItem[$_] } | Where-Object { $_ } | ForEach-Object { $_.Name })
+        if ($names.Count) { $it.Facts.Add((New-Fact 'Требует' (($names -join ', ') + '. Отмечается вместе с этим пунктом.'))) }
+    }
+    foreach ($it in @($depItem.Values)) {
+        $for = @(Get-Dependents $it.Id | ForEach-Object { $_.Name })
+        if ($for.Count) { $it.Facts.Add((New-Fact 'Нужен для' ($for -join ', '))) }
+    }
+
     # файлы: релиз files «Моих данных»; пункты появятся, когда фоновая задача получит список (Start-FilesJob)
     [void](Add-Nav 'header' 'files' 'ФАЙЛЫ')
     $fk = 'files|release'
@@ -668,7 +735,7 @@ function Show-SelectionDialog {
     # -ForSave — для сохранения: всё отмеченное, включая установленные (набор переносится на другие компьютеры)
     function Get-Chosen ([switch]$ForSave) {
         $on = @{}
-        foreach ($it in $items) { if (($ForSave -and $it.IsChecked) -or (-not $ForSave -and $it.IsPicked)) { $on[$it.Key] = $it } }
+        foreach ($it in $items) { if (($ForSave -and $it.IsChecked -and -not $it.AutoAdded) -or (-not $ForSave -and $it.IsPicked)) { $on[$it.Key] = $it } }
         $appIn = { param($A) $o = $on['app:' + $A.Id]; $o -and ($ForSave -or -not $o.IsLocked -or $o.Action -in 'update', 'reinstall') }
         return @{
             Apps     = @($appList | Where-Object { & $appIn $_ } | ForEach-Object { $_.Id })
@@ -808,11 +875,48 @@ function Show-SelectionDialog {
             }
             $it.IsChecked = [bool]$on
             if ($it.HasConfig) { $it.ConfigOn = [bool]$on -and ($Sel.Configs -contains $it.Id) }
+            $it.AutoAdded = $false
         }
+        # зависимости в сохранении не хранятся — достраиваются при загрузке
+        foreach ($it in @($depItem.Values | Where-Object { $_.IsPicked -and $reqMap.ContainsKey($_.Id) })) { Update-Deps $it -Quiet }
         $ui.Bulk = $false
         Update-Counts
         if ($ui.Mode -ne 'cat') { Update-NavHits; Update-View }
         return $miss
+    }
+
+    # зависимости после изменения одного пункта (Э8). Отмечен — нужное ему отмечается (AutoAdded) с уведомлением;
+    # снят — предупреждение, если он нужен отмеченным, и снимаются автоотмеченные, которые больше никому не нужны
+    function Update-Deps ($Changed, [switch]$Quiet) {
+        $ui.InDeps = $true
+        try {
+            if ($Changed.IsPicked) {
+                $added = @()
+                foreach ($d in (Get-ReqClosure $Changed.Id)) {
+                    $di = $depItem[$d]
+                    if ($di -and -not $di.IsChecked) { $di.AutoAdded = $true; $di.IsChecked = $true; $added += $di.Name }
+                }
+                if ($added.Count -and -not $Quiet) {
+                    Show-Notice "Добавлено: $($added -join ', '). $(if ($added.Count -eq 1) { 'Требуется' } else { 'Требуются' }) для «$($Changed.Name)»."
+                }
+            } else {
+                $need = @(Get-Dependents $Changed.Id | Where-Object { $_.IsPicked } | ForEach-Object { $_.Name })
+                if ($need.Count -and -not $Quiet -and $Changed.CanToggle) {
+                    Show-Notice "«$($Changed.Name)» не будет установлен, но он требуется для: $($need -join ', '). Без него $(if ($need.Count -eq 1) { 'программа может работать' } else { 'они могут работать' }) неправильно." 'warn'
+                }
+                foreach ($d in (Get-ReqClosure $Changed.Id)) {
+                    $di = $depItem[$d]
+                    if ($di -and $di.AutoAdded -and $di.IsChecked -and -not @(Get-Dependents $d | Where-Object { $_.IsPicked }).Count) { $di.IsChecked = $false; $di.AutoAdded = $false }
+                }
+            }
+        } finally { $ui.InDeps = $false }
+        Update-NeededBy
+    }
+    function Update-NeededBy {
+        foreach ($it in @($depItem.Values)) {
+            $n = (@(Get-Dependents $it.Id | Where-Object { $_.IsPicked } | ForEach-Object { $_.Name }) -join ', ')
+            if ($it.NeededBy -ne $n) { $it.NeededBy = $n }
+        }
     }
 
     # уведомление над списком: ok — акцентом, warn — красным
@@ -1476,6 +1580,11 @@ function Show-SelectionDialog {
     $onChange = {
         param($s, $e)
         if ($ui.Bulk) { return }
+        if ($e.PropertyName -eq 'IsPicked' -and -not $ui.InDeps -and $s.Kind -in 'app', 'tweak') {
+            # отметил сам — уже не «автоматически»; зависимости пересчитываются
+            if ($s.IsChecked -and $s.CanToggle) { $s.AutoAdded = $false }
+            Update-Deps $s
+        }
         if ($e.PropertyName -in 'IsChecked', 'ConfigOn', 'IsPicked') { Update-Counts }
     }
     foreach ($it in $items) { $it.add_PropertyChanged($onChange) }
@@ -1672,7 +1781,9 @@ function Show-SelectionDialog {
                 $st = $s.Apps[$it.Id]
                 if ($it.StatusKind -ne $st.Kind -or $it.StatusText -ne $st.Text) { $it.StatusKind = $st.Kind; $it.StatusText = $st.Text }
                 # Э7: установленная — отмечена и заблокирована; не установлена — снова свободна; unknown — как было
+                $ui.InDeps = $true   # блокировка по статусу — не действие пользователя: зависимости не трогаются
                 if ($st.Kind -in 'installed', 'update') { $it.IsLocked = $true } elseif ($st.Kind -eq 'missing') { $it.IsLocked = $false }
+                $ui.InDeps = $false
                 if ($st.Icon -and -not $it.IconSource -and -not $ui.IconTried[$it.Id]) { $ui.IconTried[$it.Id] = $true; $it.IconSource = Get-ExeIcon $st.Icon }
             }
             $ui.Status.Apps = $s.Apps
@@ -1688,6 +1799,7 @@ function Show-SelectionDialog {
         $up = @($items | Where-Object { $_.Kind -eq 'app' -and $_.StatusKind -eq 'update' }).Count
         $ctl.MarkUpdates.Content = "Отметить обновления ($up)"
         $ctl.MarkUpdates.Visibility = if ($up) { 'Visible' } else { 'Collapsed' }
+        Update-NeededBy
     }
 
     function Start-StatusJob {
@@ -2136,6 +2248,32 @@ function Show-SelectionDialog {
         Start-EngineCheck
         $themeTimer.Start()
         if (Initialize-DataLayout) { Start-DataJob 'push' }
+        # проверка окна в CI (tests\smoke.ps1): дождаться статусов, пройти по разделам, показать план, закрыть
+        if ($env:TR_SMOKE) {
+            $ui.SmokeStart = Get-Date
+            $smoke = New-Object Windows.Threading.DispatcherTimer
+            $smoke.Interval = [TimeSpan]::FromSeconds(1)
+            $smoke.add_Tick({
+                $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
+                $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
+                if ($busy -and $sec -lt 240) { return }
+                if (-not $ui.SmokeDone) {
+                    $ui.SmokeDone = $true
+                    Write-Host "  smoke: статусы готовы через $([int]$sec) с"
+                    foreach ($n in @($nav | Where-Object { $_.Kind -eq 'cat' })) { Select-Nav $n }
+                    $first = @($items | Where-Object { $_.Kind -eq 'app' } | Select-Object -First 1)
+                    if ($first) { $ctl.List.SelectedItem = $first[0] }
+                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
+                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
+                    $c = Get-RunChoice
+                    if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                    return
+                }
+                $smoke.Stop()
+                $win.Close()
+            })
+            $smoke.Start()
+        }
     })
 
     $closedOk = $win.ShowDialog()

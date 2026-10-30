@@ -511,6 +511,14 @@ try {
     $k = ($pr | ForEach-Object { "$($_.Kind):$($_.Name)" }) -join ' | '
     Check 'Э7: план — удаление первым в программах и необратимо, переустановка, настройки без установки' (
         $k -eq 'restore:Создать точку восстановления | remove:Удалить: Прог 2 | app:Переустановить: Прог 1 | config:Прог 3: с моими настройками' -and $pr[1].Irreversible -and $pr[1].Phase -eq 3) $k
+    $dapps = @(@{ Id = 'ws'; Name = 'Wireshark'; Source = 'winget'; WingetId = 'W.S'; Requires = @('np') }, @{ Id = 'np'; Name = 'Npcap'; Source = 'web' },
+               @{ Id = 'dk'; Name = 'Docker'; Source = 'winget'; WingetId = 'D.K'; Requires = @('t.wsl') })
+    $dtw = @(@{ Id = 't.wsl'; Name = 'WSL2'; Phase = 'pre'; Apply = {} })
+    $dp = Get-PbRunPlan @{ Apps = @('ws', 'dk'); Tweaks = @(); Configs = @(); Files = @() } $dapps $dtw @{ Apps = @{}; Tweaks = @{ 't.wsl' = 'applied' } }
+    $dn = @{}; foreach ($x in $dp) { $dn[$x.Key] = $x.Note }
+    $dp2 = Get-PbRunPlan @{ Apps = @('ws', 'np'); Tweaks = @(); Configs = @(); Files = @() } $dapps $dtw $null
+    Check 'Э8: план — нужное не отмечено: пометка; уже применено или отмечено — без пометки' ($dn['app:ws'] -eq 'требует: Npcap (не отмечено)' -and -not $dn['app:dk'] -and
+        -not (@($dp2 | Where-Object { $_.Note -match 'требует' }).Count)) ($dn | ConvertTo-Json)
     $plan2 = Get-PbRunPlan $sel $aps $tws $null
     $sync2 = [hashtable]::Synchronized(@{ StopAfter = $true })
     Invoke-PbRun $plan2 $sel $aps $tws $sync2 6>$null | Out-Null

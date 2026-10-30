@@ -159,6 +159,13 @@ namespace PcBase
             }
         }
 
+        // зависимости (Э8, поле Requires каталога): отмечена автоматически вместе с тем, кому нужна; в сохранение не пишется
+        public bool AutoAdded { get; set; }
+        private string _neededBy = "";
+        public string NeededBy { get { return _neededBy; } set { _neededBy = value ?? ""; Raise("NeededBy"); Raise("HasNeededBy"); Raise("NeededByText"); } }
+        public bool HasNeededBy { get { return !string.IsNullOrEmpty(_neededBy); } }
+        public string NeededByText { get { return string.IsNullOrEmpty(_neededBy) ? "" : "для " + _neededBy; } }
+
         // войдёт в прогон: отмеченная неустановленная или установленная с действием либо «с моими настройками»
         public bool IsPicked { get { return _checked && (!_locked || _action != "" || _config); } }
 
