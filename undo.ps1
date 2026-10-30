@@ -77,4 +77,7 @@ foreach ($c in $changes) {
 }
 Write-Host ''
 Write-Host '  Готово. Проводник и панель задач применят изменения после повторного входа или перезагрузки.' -ForegroundColor Green
+Write-Host '  Не отменяются через undo.ps1: удалённые встроенные приложения и OneDrive, установленные программы,' -ForegroundColor Yellow
+Write-Host '  обновления winget upgrade --all, применённые настройки программ в файлах. Для них — точка восстановления' -ForegroundColor Yellow
+Write-Host '  «tabula-rasa <дата>» (Панель управления → Восстановление) или удаление программ вручную.' -ForegroundColor Yellow
 Read-Host '  Enter — закрыть' | Out-Null

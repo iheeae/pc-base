@@ -408,13 +408,7 @@ function Update-PbDataLayout {
 
 # ---------- подключение ----------
 
-function Update-PbPath {
-    $env:Path = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps')) -join ';'
-    foreach ($p in "$env:ProgramFiles\Git\cmd", "$env:ProgramFiles\GitHub CLI") {
-        if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) { $env:Path += ";$p" }
-    }
-}
+function Update-PbPath { Update-SessionPath }   # прежнее имя: так его зовут фоновые задачи окна
 
 # Подключить Мои данные. Идёт в фоне; о ходе пишет в $Sync: Step (текст), Code и Url (вход в GitHub), Error.
 # Шаги: gh (поставить через winget) → вход в браузере → <логин>/tabula-rasa-private (создать приватной, если нет) →

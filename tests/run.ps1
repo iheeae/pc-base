@@ -256,6 +256,31 @@ try {
     try { Add-PbUserApp @{ Id = 'my.x'; Name = 'X'; WingetId = 'X.X' } @() } catch { $blocked = $true }
     Check 'только чтение: каталог не меняется' $blocked
 
+    # ---------- надёжность прогона: таймаут winget, коды, журнал изменений, кеш model.cs ----------
+    Write-Host 'надёжность прогона'
+    $script:PB.LogDir = Join-Path $tmp 'logs'
+    $ps = (Get-Process -Id $PID).Path   # тот же PowerShell вместо winget: спит дольше лимита
+    $r = Invoke-PbWingetTimed @('-NoProfile', '-Command', 'Write-Output начало; Start-Sleep 60') 0.05 'test.slow' $ps
+    Check 'таймаут: процесс снят через ~3 с, кода нет' ($r.TimedOut -and $null -eq $r.Code -and $r.Seconds -lt 15) $r
+    Check 'таймаут: вывод в отдельном журнале' ((Get-Content $r.Log -Raw) -match 'начало') (Get-Content $r.Log -Raw)
+    $r = Invoke-PbWingetTimed @('-NoProfile', '-Command', 'Write-Output "с пробелом"; exit 7') 1 'test.code' $ps
+    Check 'код выхода и аргумент с пробелами' (-not $r.TimedOut -and $r.Code -eq 7 -and (Get-Content $r.Log -Raw) -match 'с пробелом') $r
+    Check 'вывод возвращается строками (для поиска)' (@($r.Out) -contains 'с пробелом') $r.Out
+    Check 'коды winget: уже установлено, нет пакета, система не поддерживает' ((Get-PbWingetCodeInfo -1978335135).Ok -and -not (Get-PbWingetCodeInfo -1978335212).Ok -and
+        (Get-PbWingetCodeInfo -1978334957).Text -match 'не поддерживает' -and (Get-PbWingetCodeInfo 5).Text -match '0x00000005')
+    $script:PB.Changes.Clear()
+    Add-PbChange ([ordered]@{ Kind = 'Reg'; Path = 'HKCU:\Software\X'; Name = 'A' })
+    $j = Join-Path $script:PB.LogDir "changes_$($script:PB.Stamp).json"
+    Check 'журнал изменений пишется сразу, без конца прогона' ((Test-Path $j) -and (@(Get-Content $j -Raw | ConvertFrom-Json)).Count -eq 1)
+    $mc = Join-Path $tmp 'modelcache'
+    $probe = "`$ErrorActionPreference = 'Stop'; . '$((Join-Path (Join-Path $root 'lib') 'common.ps1'))'; `$script:PbUiDir = '$((Join-Path (Join-Path $root 'lib') 'ui'))'; " +
+        "`$a = [Management.Automation.Language.Parser]::ParseFile('$((Join-Path (Join-Path $root 'lib') 'gui.ps1'))', [ref]`$null, [ref]`$null); " +
+        "`$f = `$a.FindAll({ `$args[0] -is [Management.Automation.Language.FunctionDefinitionAst] -and `$args[0].Name -eq 'Import-PbModel' }, `$true)[0]; " +
+        ". ([scriptblock]::Create(`$f.Extent.Text)); Import-PbModel '$mc'; ([type]'PcBase.Item').Assembly.Location"
+    $first = & $ps -NoProfile -Command $probe
+    $second = & $ps -NoProfile -Command $probe
+    Check 'model.cs: собран в кеш один раз и загружается из него' ($first -like "$mc*" -and $second -eq $first -and @(Get-ChildItem $mc -Filter *.dll).Count -eq 1) @($first, $second)
+
     # ---------- имена ассетов ----------
     Write-Host 'имена ассетов'
     Check 'транслит' ((ConvertTo-PbAssetName 'Отчёт 2024 (итог).pdf') -eq 'Otchet_2024_itog.pdf')

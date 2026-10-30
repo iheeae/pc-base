@@ -95,12 +95,6 @@ function ConvertTo-PbLocalName ([string]$Title) {
     return $n
 }
 
-# аргумент для командной строки процесса (ProcessStartInfo.Arguments)
-function ConvertTo-PbArg ([string]$A) {
-    if ($A -and $A -notmatch '[\s"]') { return $A }
-    return '"' + ($A -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
-}
-
 # шаблон gh release download -p — точное совпадение: спецсимволы glob в классы
 function ConvertTo-PbGlob ([string]$Name) { $Name -replace '([\[\]*?])', '[$1]' }
 

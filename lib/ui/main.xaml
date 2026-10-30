@@ -56,13 +56,13 @@
                     </StackPanel>
                 </Border>
                 <Grid x:Name="SearchBox" Grid.Column="2" Width="320" Margin="0,0,8,0">
-                    <TextBox x:Name="Search" Padding="32,0,32,0" Tag="Поиск по всему…"/>
+                    <TextBox x:Name="Search" AutomationProperties.Name="Поиск" Padding="32,0,32,0" Tag="Поиск по всему…"/>
                     <TextBlock Style="{StaticResource Glyph}" Text="&#xE721;" FontSize="14" Margin="12,0,0,0"
                                HorizontalAlignment="Left" Foreground="{DynamicResource TextMuted}" IsHitTestVisible="False"/>
                     <Border x:Name="SearchKey" Style="{StaticResource Kbd}" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False">
                         <TextBlock Text="Ctrl+F" VerticalAlignment="Center"/>
                     </Border>
-                    <Button x:Name="SearchClear" HorizontalAlignment="Right" Width="24" MinWidth="24" Height="24" Padding="0" Margin="0,0,4,0"
+                    <Button x:Name="SearchClear" AutomationProperties.Name="Очистить поиск" HorizontalAlignment="Right" Width="24" MinWidth="24" Height="24" Padding="0" Margin="0,0,4,0"
                             Background="Transparent" BorderThickness="0" Focusable="False" Visibility="Collapsed" ToolTip="Очистить (Esc)">
                         <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"/>
                     </Button>
@@ -159,7 +159,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock x:Name="NoticeIcon" Style="{StaticResource Glyph}" Text="&#xE73E;" Margin="0,0,10,0" Foreground="{DynamicResource AccentText}"/>
                             <TextBlock x:Name="NoticeText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,8"/>
-                            <Button x:Name="NoticeClose" Grid.Column="2" Style="{StaticResource IconButton}" ToolTip="Скрыть">
+                            <Button x:Name="NoticeClose" AutomationProperties.Name="Скрыть уведомление" Grid.Column="2" Style="{StaticResource IconButton}" ToolTip="Скрыть">
                                 <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"/>
                             </Button>
                         </Grid>
@@ -411,7 +411,7 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="PcNameLabel" Text="Имя ПК" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBox x:Name="PcName" Grid.Column="1" Width="144" MaxLength="15" Tag="не менять"
+                <TextBox x:Name="PcName" AutomationProperties.Name="Новое имя компьютера" Grid.Column="1" Width="144" MaxLength="15" Tag="не менять"
                          ToolTip="Латинские буквы, цифры и дефис, не более 15 символов. Пустое поле — имя не меняется"/>
                 <!-- в домене вместо поля: имя меняется только доменной учётной записью, Tabula Rasa его не трогает -->
                 <TextBlock x:Name="PcNameFixed" Grid.ColumnSpan="2" VerticalAlignment="Center" Visibility="Collapsed"

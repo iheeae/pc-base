@@ -29,8 +29,8 @@ function Get-UiTheme {
         $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF
         $accent = [Windows.Media.Color]::FromRgb([byte]($v -band 0xFF), [byte](($v -shr 8) -band 0xFF), [byte](($v -shr 16) -band 0xFF))
     } catch { }
-    $fams = @([Windows.Media.Fonts]::SystemFontFamilies | ForEach-Object { $_.Source })
-    $font = if ($fams -contains 'Segoe UI Variable Text') { 'Segoe UI Variable Text' } else { 'Segoe UI' }
+    # файл шрифта вместо перечисления всех системных шрифтов: то занимало заметную часть старта окна
+    $font = if (Test-Path (Join-Path $env:windir 'Fonts\SegUIVar.ttf')) { 'Segoe UI Variable Text' } else { 'Segoe UI' }
     return @{ Dark = $dark; Accent = $accent; Font = $font }
 }
 
@@ -40,6 +40,13 @@ function Set-UiPalette ($Res, $Theme) {
         [Windows.Media.Color]::FromRgb([byte]($A.R + ($B.R - $A.R) * $T), [byte]($A.G + ($B.G - $A.G) * $T), [byte]($A.B + ($B.B - $A.B) * $T))
     }
     function Lum ($C) { (0.2126 * $C.R + 0.7152 * $C.G + 0.0722 * $C.B) / 255 }
+    # относительная яркость по WCAG и текст на заливке: чёрный или белый — у кого контраст выше (порог по Lum давал
+    # белый текст на светлых акцентах: 2,4:1 в тёмной теме при норме 4,5:1)
+    function RelLum ($C) {
+        $f = { param($v) $x = $v / 255; if ($x -le 0.03928) { $x / 12.92 } else { [Math]::Pow(($x + 0.055) / 1.055, 2.4) } }
+        0.2126 * (& $f $C.R) + 0.7152 * (& $f $C.G) + 0.0722 * (& $f $C.B)
+    }
+    function Get-OnColor ($C) { $l = RelLum $C; if ((1.05 / ($l + 0.05)) -ge (($l + 0.05) / 0.05)) { [Windows.Media.Colors]::White } else { [Windows.Media.Colors]::Black } }
 
     $white = [Windows.Media.Colors]::White; $black = [Windows.Media.Colors]::Black
     $a = $Theme.Accent
@@ -49,7 +56,7 @@ function Set-UiPalette ($Res, $Theme) {
                 ControlStrong = '#9A9A9A'; Text = '#FFFFFF'; TextMuted = '#ABABAB'; PillBg = '#3A3A3A'; Danger = '#FF99A4'
                 DangerSoft = '#442726'; ScrollThumb = '#5C5C5C' }
         $fill = Mix $a $white 0.45
-        $fillFg = if ((Lum $fill) -gt 0.45) { $black } else { $white }
+        $fillFg = Get-OnColor $fill
         $text = Mix $a $white 0.5
         $soft = [Windows.Media.Color]::FromArgb(0x33, $text.R, $text.G, $text.B)
     } else {
@@ -58,7 +65,7 @@ function Set-UiPalette ($Res, $Theme) {
                 ControlStrong = '#8A8A8A'; Text = '#1B1B1B'; TextMuted = '#5F5F5F'; PillBg = '#EDEDED'; Danger = '#C42B1C'
                 DangerSoft = '#FDE7E9'; ScrollThumb = '#C2C2C2' }
         $fill = if ((Lum $a) -gt 0.45) { Mix $a $black 0.35 } else { $a }
-        $fillFg = $white
+        $fillFg = Get-OnColor $fill
         $text = $fill
         $soft = [Windows.Media.Color]::FromArgb(0x1F, $fill.R, $fill.G, $fill.B)
     }
@@ -93,6 +100,28 @@ function New-UiIcon ($Res, [int]$Size = 64) {
     return $frame
 }
 
+# model.cs компилируется один раз: сборка лежит в %LOCALAPPDATA%\tabula-rasa\cache\model-<sha256 исходника>.dll
+# (это своя сборка из исходника репозитория, не внешняя DLL). Исходник изменился — другое имя, старая не используется.
+# Не вышло (нет прав на папку, сборка повреждена) — компиляция в память, как раньше
+function Import-PbModel ([string]$Cache = (Join-Path $env:LOCALAPPDATA 'tabula-rasa\cache')) {
+    $src = Join-Path $script:PbUiDir 'model.cs'
+    $dll = $null
+    try {
+        $hash = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.Substring(0, 16).ToLower()
+        $dll = Join-Path $Cache "model-$hash-$($PSVersionTable.PSVersion.Major).dll"
+        if (-not (Test-Path -LiteralPath $dll)) {
+            New-Item -ItemType Directory -Path $Cache -Force | Out-Null
+            Add-Type -Path $src -OutputAssembly $dll -OutputType Library -ErrorAction Stop
+            # прежние версии сборки (уже загруженные другим окном удалятся в следующий раз)
+            foreach ($old in (Get-ChildItem -LiteralPath $Cache -Filter 'model-*.dll' | Where-Object { $_.FullName -ne $dll })) { Remove-Item $old.FullName -Force -ErrorAction SilentlyContinue }
+        }
+        if (-not ('PcBase.Item' -as [type])) { [void][Reflection.Assembly]::LoadFrom($dll) }
+    } catch {
+        if ($dll -and -not ('PcBase.Item' -as [type])) { Remove-Item -LiteralPath $dll -Force -ErrorAction SilentlyContinue }   # битая — собрать заново в следующий раз
+    }
+    if (-not ('PcBase.Item' -as [type])) { Add-Type -Path $src }
+}
+
 function Read-Xaml ([string]$Name) {
     $fs = [IO.File]::OpenRead((Join-Path $script:PbUiDir $Name))
     try { return [Windows.Markup.XamlReader]::Load($fs) } finally { $fs.Dispose() }
@@ -101,7 +130,7 @@ function Read-Xaml ([string]$Name) {
 # один раз на процесс: модель, DPI, WPF, общие ресурсы. Возвращает тему.
 function Initialize-Ui {
     if ($script:PbUiTheme) { return $script:PbUiTheme }
-    if (-not ('PcBase.Item' -as [type])) { Add-Type -Path (Join-Path $script:PbUiDir 'model.cs') }
+    if (-not ('PcBase.Item' -as [type])) { Import-PbModel }
     [PcBase.Native]::EnableDpiAwareness()
     [PcBase.Native]::SetAppId('iheeae.tabula-rasa')
     [AppContext]::SetSwitch('Switch.System.Windows.DoNotScaleForDpiChanges', $false)
@@ -599,7 +628,9 @@ function Show-SelectionDialog {
     # пока идёт фоновая отправка или подключение, git своих данных трогать нельзя
     function Test-DataBusy {
         if (-not $ui.Job) { return $false }
-        Show-Notice 'Выполняется синхронизация с GitHub. Повторите действие через несколько секунд.' 'warn'
+        $t = 'Выполняется синхронизация с GitHub. Повторите действие через несколько секунд.'
+        Show-Notice $t 'warn'
+        $ctl.CaptureSummary.Text = $t   # уведомление над списком в режиме «Снятие настроек» не видно
         return $true
     }
 
@@ -663,6 +694,7 @@ function Show-SelectionDialog {
     function New-IconButton ([string]$Glyph, [string]$Tag, [string]$Tip) {
         $b = New-Object Windows.Controls.Button
         $b.Style = $win.FindResource('IconButton'); $b.Tag = $Tag; $b.ToolTip = $Tip
+        [Windows.Automation.AutomationProperties]::SetName($b, $Tip)   # кнопка-значок: имя для экранного диктора
         $g = New-Object Windows.Controls.TextBlock
         $g.Style = $win.FindResource('Glyph'); $g.Text = $Glyph; $g.FontSize = 14; $g.IsHitTestVisible = $false
         $b.Content = $g
@@ -749,6 +781,7 @@ function Show-SelectionDialog {
                 $g = New-Object Windows.Controls.TextBlock
                 $g.Style = $win.FindResource('Glyph'); $g.Text = [string][char]0xE712; $g.FontSize = 14
                 $ctl.DataBtn.Content = $g
+                [Windows.Automation.AutomationProperties]::SetName($ctl.DataBtn, 'Действия с «Моими данными»')
                 $ctl.DataBtn.ToolTip = "Мои данные: $($script:PB.DataRoot)$(if ($st.Repo) { " ← $($st.Repo)" })"
             }
         }
@@ -1406,10 +1439,14 @@ function Show-SelectionDialog {
             return
         }
         if ($ctl.ModeApply.IsChecked) {
-            $irr = @($Tweaks | Where-Object { $_.Irreversible -and $c.Tweaks -contains $_.Id }).Count
+            $irr = @($Tweaks | Where-Object { $_.Irreversible -and $c.Tweaks -contains $_.Id } | ForEach-Object { $_.Name })
             $lines = @("Программ: $($c.Apps.Count)$(if ($c.Configs.Count) { ", из них с моими настройками: $($c.Configs.Count)" })",
                 "Настроек Windows: $($c.Tweaks.Count)")
-            if ($irr) { $lines += @{ Text = "Необратимых изменений: $irr. Их можно отменить только точкой восстановления."; Tone = 'danger' } }
+            if ($irr.Count) {
+                $lines += @{ Text = "Необратимые изменения ($($irr.Count)). Они не отменяются через undo.ps1, только точкой восстановления:"; Tone = 'danger'; Gap = $true }
+                $lines += @{ Text = (($irr | ForEach-Object { "• $_" }) -join "`n"); Tone = 'danger' }
+                $lines += @{ Text = 'Если точку восстановления создать не удастся (защита системы отключена политикой), перед ними будет задан вопрос.'; Tone = 'muted' }
+            }
             if ($c.Files.Count) { $lines += "Файлов: $($c.Files.Count) (загрузка в «Рабочий стол\tabula-rasa-files»)" }
             $lines += if ($name) { "Имя компьютера: $env:COMPUTERNAME → $($name.ToUpper())" } else { "Имя компьютера: $env:COMPUTERNAME (без изменений)" }
             $lines += @{ Text = 'Изменения будут применены сразу. Перед применением создаётся точка восстановления; отмена — undo.ps1.'; Tone = 'muted'; Gap = $true }
@@ -1451,6 +1488,10 @@ function Show-SelectionDialog {
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
     $ctl.Nav.SelectedItem = $start
     $win.add_ContentRendered({
+        # время от старта процесса до окна — в журнал выполнения (setup.ps1); цель — меньше 2 с
+        try { $script:PB.WindowShownSec = [Math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 1) } catch { }
+        # Topmost нужен, только чтобы окно появилось поверх консоли; дальше он закрывал бы браузер со страницей входа в GitHub
+        $win.Topmost = $false; [void]$win.Activate()
         Select-Nav $ctl.Nav.SelectedItem
         Start-FilesJob
         if (Initialize-DataLayout) { Start-DataJob 'push' }

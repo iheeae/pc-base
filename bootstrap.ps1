@@ -73,7 +73,8 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     return
 }
 git config --global core.quotepath false
-git config --global --add safe.directory ($Dest -replace '\\', '/')
+$safe = $Dest -replace '\\', '/'
+if (@(git config --global --get-all safe.directory 2>$null) -notcontains $safe) { git config --global --add safe.directory $safe }
 
 # ---------- 3. clone ----------
 # Move a folder, waiting up to 60 s if something holds it (Explorer, a terminal). Returns $true if moved.

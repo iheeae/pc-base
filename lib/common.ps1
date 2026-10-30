@@ -14,6 +14,7 @@ $script:PB = [ordered]@{
     Os                   = $null
     IsDomain             = $false
     IsLaptop             = $false
+    WindowShownSec       = $null      # от запуска процесса до окна (замер — gui.ps1, запись в журнал — setup.ps1)
 }
 
 # ---------- переезд pc-base → Tabula Rasa ----------
@@ -78,11 +79,6 @@ function Add-Manual ([string]$Text) {
 
 # ---------- окружение ----------
 
-function Test-IsAdmin {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
 function Get-EnvInfo {
     $build = [Environment]::OSVersion.Version.Build
     $script:PB.Os = if ($build -ge 22000) { '11' } else { '10' }
@@ -101,24 +97,25 @@ function Test-SameUserAsDesktop {
     } catch { return $true }
 }
 
+# PATH заново из системы и пользователя (после установок) плюс папки Git и GitHub CLI, если их ещё нет в PATH
 function Update-SessionPath {
     $m = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $u = [Environment]::GetEnvironmentVariable('Path', 'User')
     $wa = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
     $env:Path = (@($m, $u, $wa) | Where-Object { $_ }) -join ';'
-}
-
-function Add-MachinePath ([string]$Dir) {
-    $cur = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $parts = $cur -split ';' | Where-Object { $_ }
-    if ($parts -notcontains $Dir) {
-        [Environment]::SetEnvironmentVariable('Path', (($parts + $Dir) -join ';'), 'Machine')
-        [void]$script:PB.Changes.Add([ordered]@{ Kind = 'MachinePath'; Dir = $Dir })
+    foreach ($p in "$env:ProgramFiles\Git\cmd", "$env:ProgramFiles\GitHub CLI") {
+        if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) { $env:Path += ";$p" }
     }
-    Update-SessionPath
 }
 
 # ---------- реестр, службы, задачи (всё пишется в журнал изменений для undo.ps1) ----------
+
+# запись в журнал изменений и сразу на диск: если прогон оборвётся (закрыли окно, сбой питания), undo.ps1 всё равно
+# откатит уже сделанное. Записей — сотни, перезапись файла целиком на каждую не заметна
+function Add-PbChange ($Change) {
+    [void]$script:PB.Changes.Add($Change)
+    try { [void](Save-Changes) } catch { }
+}
 
 function Set-Reg {
     param(
@@ -139,7 +136,7 @@ function Set-Reg {
         }
     } catch { }
     New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
-    [void]$script:PB.Changes.Add([ordered]@{
+    Add-PbChange ([ordered]@{
         Kind = 'Reg'; Path = $Path; Name = $Name; New = $Value; Type = $Type
         OldExists = $oldExists; Old = $oldValue; OldKind = $oldKind; KeyCreated = $keyCreated
     })
@@ -150,7 +147,7 @@ function Set-RegDefault ([string]$Path, [string]$Value) {
     $existed = Test-Path $Path
     if (-not $existed) { New-Item -Path $Path -Force | Out-Null }
     Set-Item -Path $Path -Value $Value -Force
-    [void]$script:PB.Changes.Add([ordered]@{ Kind = 'RegKey'; Path = $Path; KeyCreated = (-not $existed) })
+    Add-PbChange ([ordered]@{ Kind = 'RegKey'; Path = $Path; KeyCreated = (-not $existed) })
 }
 
 function Set-SvcStart ([string]$Name, [ValidateSet('Disabled', 'Manual', 'Automatic')][string]$Start) {
@@ -159,7 +156,7 @@ function Set-SvcStart ([string]$Name, [ValidateSet('Disabled', 'Manual', 'Automa
     $old = (Get-CimInstance Win32_Service -Filter "Name='$Name'").StartMode
     if ($Start -eq 'Disabled' -and $svc.Status -eq 'Running') { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
     Set-Service -Name $Name -StartupType $Start -ErrorAction Stop
-    [void]$script:PB.Changes.Add([ordered]@{ Kind = 'Service'; Name = $Name; Old = $old; New = $Start })
+    Add-PbChange ([ordered]@{ Kind = 'Service'; Name = $Name; Old = $old; New = $Start })
 }
 
 function Disable-Task ([string]$TaskPath, [string]$TaskName) {
@@ -167,7 +164,7 @@ function Disable-Task ([string]$TaskPath, [string]$TaskName) {
     if (-not $t) { return }
     $wasEnabled = $t.State -ne 'Disabled'
     if ($wasEnabled) { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null }
-    [void]$script:PB.Changes.Add([ordered]@{ Kind = 'Task'; TaskPath = $TaskPath; TaskName = $TaskName; WasEnabled = $wasEnabled })
+    Add-PbChange ([ordered]@{ Kind = 'Task'; TaskPath = $TaskPath; TaskName = $TaskName; WasEnabled = $wasEnabled })
 }
 
 # Удаление UWP у всех пользователей и из образа (чтобы не вернулись у новых профилей). Не откатывается.
@@ -217,11 +214,73 @@ function Initialize-Winget {
     return [bool](Get-Command winget -ErrorAction SilentlyContinue)
 }
 
-function Test-WingetInstalled ([string]$Id) {
-    $null = & winget list --id $Id -e --accept-source-agreements --disable-interactivity 2>$null
-    return ($LASTEXITCODE -eq 0)
+# аргумент для командной строки процесса (ProcessStartInfo.Arguments)
+function ConvertTo-PbArg ([string]$A) {
+    if ($A -and $A -notmatch '[\s"]') { return $A }
+    return '"' + ($A -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
 }
 
+# процесс и все его потомки (winget → msiexec → установщик); без taskkill — только сам процесс
+function Stop-PbProcessTree ([int]$Id) {
+    if (Get-Command taskkill.exe -ErrorAction SilentlyContinue) { & taskkill.exe /PID $Id /T /F *> $null; return }
+    try { (Get-Process -Id $Id -ErrorAction Stop).Kill() } catch { }
+}
+
+# winget (или $Exe) отдельным процессом с ограничением времени. Вывод — в logs\winget_<запуск>_<метка>.log, а не в журнал
+# выполнения (прогресс-бары его забивали); в консоли — сколько прошло. По таймауту дерево процессов снимается, прогон
+# идёт дальше. @{ Code; TimedOut; Log; Seconds }
+function Invoke-PbWingetTimed ([string[]]$WingetArgs, [double]$TimeoutMin = 15, [string]$Label = 'winget', [string]$Exe = 'winget') {
+    New-Item -ItemType Directory -Path $script:PB.LogDir -Force | Out-Null
+    $safe = $Label -replace '[^\w.-]', '_'; if ($safe.Length -gt 60) { $safe = $safe.Substring(0, 60) }
+    $log = Join-Path $script:PB.LogDir ("winget_{0}_{1}.log" -f $script:PB.Stamp, $safe)
+    $psi = New-Object Diagnostics.ProcessStartInfo $Exe
+    $psi.Arguments = (@($WingetArgs) | ForEach-Object { ConvertTo-PbArg $_ }) -join ' '
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8; $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $p = [Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync()
+    $limit = [int]($TimeoutMin * 60); $timedOut = $false; $said = 0
+    while (-not $p.WaitForExit(1000)) {
+        $sec = [int]$sw.Elapsed.TotalSeconds
+        if ($sec -ge $limit) { $timedOut = $true; Stop-PbProcessTree $p.Id; break }
+        if ($sec - $said -ge 15) {
+            $said = $sec
+            Write-Host ("      … идёт {0}:{1:00}, ограничение {2} мин" -f [int][Math]::Floor($sec / 60), ($sec % 60), $TimeoutMin) -ForegroundColor DarkGray
+        }
+    }
+    [void]$p.WaitForExit(10000)
+    $text = "> $Exe $($psi.Arguments)`r`n"
+    try { $text += $out.Result + $err.Result } catch { }
+    try { [IO.File]::WriteAllText($log, $text, (New-Object Text.UTF8Encoding $false)) } catch { }
+    $code = $null
+    if (-not $timedOut -and $p.HasExited) { $code = $p.ExitCode }
+    return @{ Code = $code; TimedOut = $timedOut; Log = $log; Seconds = [int]$sw.Elapsed.TotalSeconds; Out = @($text -split "`r?`n" | Select-Object -Skip 1) }
+}
+
+function Test-WingetInstalled ([string]$Id) {
+    $r = Invoke-PbWingetTimed @('list', '--id', $Id, '-e', '--accept-source-agreements', '--disable-interactivity') 2 "list_$Id"
+    return ($r.Code -eq 0)
+}
+
+# коды winget при установке: @{ Ok; Reboot; Text }
+function Get-PbWingetCodeInfo ($Code) {
+    switch ($Code) {
+        0           { return @{ Ok = $true } }
+        3010        { return @{ Ok = $true; Reboot = $true; Text = 'нужна перезагрузка' } }
+        1641        { return @{ Ok = $true; Reboot = $true; Text = 'нужна перезагрузка' } }
+        -1978335189 { return @{ Ok = $true; Text = 'обновление не требуется' } }                                       # 0x8A15002B
+        -1978335135 { return @{ Ok = $true; Text = 'уже установлено' } }                                               # 0x8A150061
+        -1978334967 { return @{ Ok = $true; Reboot = $true; Text = 'установка завершится после перезагрузки' } }       # 0x8A150109
+        -1978334966 { return @{ Reboot = $true; Text = 'перед установкой нужна перезагрузка' } }                       # 0x8A15010A
+        -1978335212 { return @{ Text = 'пакет не найден в источнике winget' } }                                         # 0x8A150014
+        -1978334957 { return @{ Text = 'установщик сообщил, что конфигурация системы не поддерживает этот пакет' } }   # 0x8A150113
+    }
+    return @{ Text = ('winget вернул {0} (0x{1:X8})' -f $Code, ([int64]$Code -band 0xFFFFFFFF)) }
+}
+
+# TimeoutMin в каталоге — для тяжёлых пакетов; по умолчанию 15 мин, с мастером установки — 60
 function Install-WingetApp ($App) {
     if (Test-WingetInstalled $App.WingetId) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
     $a = @('install', '--id', $App.WingetId, '-e', '--source', 'winget',
@@ -229,15 +288,20 @@ function Install-WingetApp ($App) {
     if ($App.Interactive) { $a += '--interactive' } else { $a += @('--silent', '--disable-interactivity') }
     if ($App.Scope)    { $a += @('--scope', $App.Scope) }
     if ($App.Override) { $a += @('--override', $App.Override) }
-    Write-Host "    установка $($App.Name) ($($App.WingetId))..." -ForegroundColor Gray
-    & winget @a
-    $code = $LASTEXITCODE
-    # 0x8A15002B — обновление не требуется, 0x8A150061 — уже установлен; 3010/1641 — нужна перезагрузка
-    if ($code -in 3010, 1641) { $script:PB.NeedReboot = $true }
-    if ($code -in 0, 3010, 1641, -1978335189, -1978335135 -or (Test-WingetInstalled $App.WingetId)) {
-        Write-Ok $App.Name; Add-Result $App.Name 'установлено'
+    $limit = if ($App.TimeoutMin) { [double]$App.TimeoutMin } elseif ($App.Interactive) { 60 } else { 15 }
+    Write-Host "    установка $($App.Name) ($($App.WingetId)), не дольше $limit мин..." -ForegroundColor Gray
+    $r = Invoke-PbWingetTimed $a $limit $App.WingetId
+    if ($r.TimedOut) {
+        Write-Fail "$($App.Name): установка не завершилась за $limit мин и прервана"
+        Add-Result $App.Name 'ТАЙМАУТ' "прервано через $limit мин; журнал winget: $($r.Log)"
+        return
+    }
+    $i = Get-PbWingetCodeInfo $r.Code
+    if ($i.Reboot) { $script:PB.NeedReboot = $true }
+    if ($i.Ok -or (Test-WingetInstalled $App.WingetId)) {
+        Write-Ok "$($App.Name)$(if ($i.Text) { ": $($i.Text)" })"; Add-Result $App.Name 'установлено' ([string]$i.Text)
     } else {
-        Write-Fail "$($App.Name): winget вернул $code"; Add-Result $App.Name 'ОШИБКА' "winget exit $code"
+        Write-Fail "$($App.Name): $($i.Text)"; Add-Result $App.Name 'ОШИБКА' "$($i.Text); журнал winget: $($r.Log)"
     }
 }
 
@@ -254,6 +318,8 @@ function Test-UninstallEntry ([string]$Like) {
 
 function Install-WebApp ($App) {
     if (Test-UninstallEntry $App.Detect) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
+    foreach ($u in $App.PageUrl, $App.BaseUrl) { if ($u -notmatch '^https://') { throw "адрес $u не HTTPS: загрузка без шифрования не выполняется" } }
+    if (-not $App.Signer) { throw 'в каталоге не указан издатель (Signer): без проверки издателя файл с сайта не запускается' }
     Write-Host "    поиск актуальной версии на $($App.PageUrl)..." -ForegroundColor Gray
     $html = (Invoke-WebRequest -Uri $App.PageUrl -UseBasicParsing -ErrorAction Stop).Content
     $found = @([regex]::Matches($html, $App.FileRegex) | ForEach-Object {
@@ -266,7 +332,7 @@ function Install-WebApp ($App) {
     Write-Host "    загрузка $file..." -ForegroundColor Gray
     Invoke-WebRequest -Uri ($App.BaseUrl + $file) -OutFile $dst -UseBasicParsing -ErrorAction Stop
     $sig = Get-AuthenticodeSignature $dst
-    if ($sig.Status -ne 'Valid' -or ($App.Signer -and $sig.SignerCertificate.Subject -notmatch $App.Signer)) {
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch $App.Signer) {
         Remove-Item $dst -Force -ErrorAction SilentlyContinue
         throw "цифровая подпись не прошла проверку ($($sig.Status); $($sig.SignerCertificate.Subject)). Файл удалён и не запускался"
     }
