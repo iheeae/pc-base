@@ -11,7 +11,7 @@
 #   * «Файлы» — релиз files «Моих данных» (lib\files.ps1): список приходит в фоне; без подключения — карточка с кнопкой
 #   * тема и акцент — как в Windows
 #
-# Возвращает @{ Apps; Configs; Tweaks; Files; FileTitles; Name; DryRun } или $null, если окно закрыли.
+# Возвращает @{ Apps; Configs; Tweaks; Files; FileTitles; Name } (для -Console) или $null, если окно закрыли.
 
 $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 . (Join-Path $PSScriptRoot 'data.ps1')
@@ -579,7 +579,6 @@ function Show-SelectionDialog {
         $Apps, $Tweaks,
         [hashtable]$Initial,         # сохранение, с которым открыть окно (Read-SaveFile)
         [string[]]$Notices,          # что сказать при открытии (переезд папок и т. п.)
-        [bool]$DryRun = $true,
         [bool]$IsDomain = $false,
         [bool]$RunInWindow = $true,  # план, прогон и итог — в окне (по умолчанию); $false — вернуть выбор, прогон в консоли (-Console)
         [string]$Title = 'Tabula Rasa'
@@ -591,10 +590,10 @@ function Show-SelectionDialog {
     foreach ($n in 'TabInstall', 'TabCapture', 'InstallPane', 'InstallBar', 'CapturePane', 'CaptureHint', 'CaptureList', 'CaptureCard', 'CaptureCardIcon',
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
-        'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
+        'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'TabSwitch', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
         'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
-        'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
+        'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
         $ctl[$n] = $win.FindName($n)
@@ -1579,15 +1578,6 @@ function Show-SelectionDialog {
     $ctl.AddAppBtn.add_Click({ Add-MyApp })
     $ctl.RemoveMine.add_Click({ Remove-MyApp $ctl.Detail.DataContext })
 
-    function Update-OkBtn {
-        if ($ctl.ModeApply.IsChecked) {
-            $ctl.OkBtn.Content = 'Применить'
-            $ctl.OkBtn.Style = $win.FindResource('AccentButton')
-        } else {
-            $ctl.OkBtn.Content = 'Показать план'
-            $ctl.OkBtn.ClearValue([Windows.FrameworkElement]::StyleProperty)
-        }
-    }
 
     # --- события ---
     $onChange = {
@@ -1775,10 +1765,6 @@ function Show-SelectionDialog {
     }
     $ctl.PcName.add_TextChanged({ $ctl.PcName.ClearValue([Windows.Controls.Control]::BorderBrushProperty) })
 
-    $ctl.ModePlan.IsChecked = $DryRun
-    $ctl.ModeApply.IsChecked = -not $DryRun
-    $ctl.ModePlan.add_Checked({ Update-OkBtn })
-    $ctl.ModeApply.add_Checked({ Update-OkBtn })
 
     # --- статус программ и твиков: фоновая проверка при старте (lib\status.ps1), окно не ждёт ---
     $statusTimer = New-Object Windows.Threading.DispatcherTimer
@@ -1867,6 +1853,9 @@ function Show-SelectionDialog {
         $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run')
                   RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunClose = @('done') }
         foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
+        # журнал — только во время прогона и в итоге; на экране плана он пуст
+        $ctl.LogToggle.Visibility = if ($State -eq 'plan') { 'Collapsed' } else { 'Visible' }
+        if ($State -eq 'plan') { $ctl.RunLog.Visibility = 'Collapsed'; $ctl.LogToggle.Content = 'Показать журнал' }
         # во время прогона выбор и режимы не трогаются
         foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
     }
@@ -1874,6 +1863,8 @@ function Show-SelectionDialog {
     function Show-Pane ([string]$Which) {
         $run = $Which -eq 'run'
         $ctl.RunPane.Visibility = if ($run) { 'Visible' } else { 'Collapsed' }
+        # «Установка | Снятие настроек» — только при выборе: переключение с экрана плана или прогона ломало окно
+        $ctl.TabSwitch.Visibility = if ($run) { 'Hidden' } else { 'Visible' }
         $ctl.InstallPane.Visibility = if (-not $run -and -not $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
         $ctl.InstallBar.Visibility = $ctl.InstallPane.Visibility
         $ctl.CapturePane.Visibility = if (-not $run -and $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
@@ -2209,22 +2200,17 @@ function Show-SelectionDialog {
         Update-Theme
     })
 
-    # «Показать план» — план в окне; «Применить» — подтверждение и прогон в окне.
-    # С -Console (RunInWindow = $false) — как раньше: выбор возвращается в setup.ps1, прогон в консоли
+    # «Показать план» — план в окне; применение — кнопкой «Применить…» на экране плана после подтверждения.
+    # С -Console (RunInWindow = $false) — выбор возвращается в setup.ps1: план и подтверждение — в консоли
     $ctl.OkBtn.add_Click({
         $c = Get-RunChoice
         if (-not $c) { return }
         if (-not $RunInWindow) {
-            if ($ctl.ModeApply.IsChecked -and -not (Confirm-Apply $c)) { return }
             $ui.Result = $c
             $win.DialogResult = $true
             return
         }
-        if ($ctl.ModeApply.IsChecked) {
-            if (-not (Confirm-Apply $c)) { return }
-            $ui.PlanSel = $c; $ui.LastSel = $c
-            Start-Run $c
-        } else { Show-Plan $c }
+        Show-Plan $c
     })
 
     # горячие клавиши: Ctrl+F — поиск, Esc — очистить его, Ctrl+1/2/3 — разделы
@@ -2256,7 +2242,6 @@ function Show-SelectionDialog {
         if ($miss) { Show-Notice "Открыто «$($Initial.Name)». Пропущено пунктов, отсутствующих в каталоге этого компьютера: $miss." 'warn' }
     }
     if (@($Notices | Where-Object { $_ }).Count) { Show-Notice (@($Notices | Where-Object { $_ }) -join ' ') 'warn' }
-    Update-OkBtn
     $saved = Read-UiState
     Restore-UiState $win $saved
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
@@ -2310,6 +2295,12 @@ function Show-SelectionDialog {
                         $env:TR_SMOKE_STEP = 'план'
                         $c = Get-RunChoice
                         if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                        $env:TR_SMOKE_STEP = 'журнал'
+                        $ctl.RunLog.Visibility = 'Visible'
+                        $ctl.RunLog.AppendText(((1..80 | ForEach-Object { "строка журнала $_" }) -join "`r`n"))
+                        $win.UpdateLayout()
+                        if ($ctl.RunLog.ActualHeight -lt 120) { throw "журнал выполнения слишком низкий: $([int]$ctl.RunLog.ActualHeight) px" }
+                        Write-Host "  smoke: журнал $([int]$ctl.RunLog.ActualHeight) px"
                         $env:TR_SMOKE_STEP = 'план показан'
                         return
                     }
@@ -2329,7 +2320,5 @@ function Show-SelectionDialog {
     $closedOk = $win.ShowDialog()
     if ($RunInWindow) { return @{ RanInWindow = $true; Ran = [bool]$ui.Ran } }
     if (-not $closedOk) { return $null }
-    $out = $ui.Result
-    $out.DryRun = [bool]$ctl.ModePlan.IsChecked
-    return $out
+    return $ui.Result
 }
