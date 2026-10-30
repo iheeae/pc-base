@@ -18,6 +18,7 @@ $script:PB = [ordered]@{
     CheckOnly            = $false     # режим проверки твиков: Set-Reg и др. сравнивают, а не пишут (Get-PbTweakStatus)
     RunSync              = $null      # прогон из окна: общий с окном Synchronized-хеш (lib\run.ps1); в консоли — $null
     Upgrades             = @()        # id программ, для которых выбрано обновление (статус «есть обновление»)
+    Report               = $null      # отчёт о последнем прогоне (lib\report.ps1)
 }
 
 # ---------- переезд pc-base → Tabula Rasa ----------

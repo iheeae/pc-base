@@ -13,7 +13,12 @@
 #   -NoPull                 не подтягивать свежую версию из git
 #   -DryRun                 открыть окно в режиме «только показать план» (он и так по умолчанию)
 #   -DataRoot <папка>       где лежат свои данные, если не в C:\tabula-rasa-private
-#   -Console                план и прогон — в консоли, как раньше (для отладки); по умолчанию — в окне, консоль скрыта
+#   -Console                план и прогон — в консоли, как раньше (для отладки); по умолчанию — в окне
+#   -Spawned                служебный: так setup.ps1 запускает сам себя скрытым процессом
+#
+# Обычный запуск (без -Console) — программа без консоли: setup.ps1 запускает себя заново скрытым процессом
+# (с правами администратора, в STA) и отпускает окно, из которого его запустили, оставив в нём одну строку.
+# Шаги старта видны на заставке (lib\splash.ps1), вопросы и ошибки — в окнах, отчёт о прогоне — lib\report.ps1.
 
 [CmdletBinding()]
 param(
@@ -21,7 +26,8 @@ param(
     [switch]$NoPull,
     [switch]$DryRun,
     [string]$DataRoot,
-    [switch]$Console
+    [switch]$Console,
+    [switch]$Spawned
 )
 
 $ErrorActionPreference = 'Continue'   # Stop ломает нативные команды в PS 5.1; где надо — -ErrorAction Stop явно
@@ -32,6 +38,38 @@ $ProgressPreference = 'SilentlyContinue'
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 $isAdmin = $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $isSta = [Threading.Thread]::CurrentThread.ApartmentState -eq 'STA'
+$script:PbSpawned = [bool]$Spawned -and -not $Console
+$PbPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+# ключи для повторного запуска (в кавычках: Start-Process склеивает аргументы в одну строку)
+function Get-PbSetupArgs ([switch]$WithPull) {
+    $a = @()
+    if ($Selection) { $a += @('-Selection', "`"$Selection`"") }
+    if ($NoPull -and -not $WithPull) { $a += '-NoPull' }
+    if ($DryRun) { $a += '-DryRun' }
+    if ($DataRoot) { $a += @('-DataRoot', "`"$DataRoot`"") }
+    return $a
+}
+
+# setup.ps1 скрытым процессом: без окна консоли, с правами администратора (-Elevate — через запрос UAC)
+function Start-PbSetupHidden ([string]$File, [string[]]$Rest, [switch]$Elevate) {
+    $p = @{ FilePath = $PbPowerShell; WindowStyle = 'Hidden'; PassThru = $true; ErrorAction = 'Stop'
+            ArgumentList = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$File`"") + @($Rest) + '-Spawned' }
+    if ($Elevate) { $p.Verb = 'RunAs' } else { $p.WorkingDirectory = $env:SystemRoot }
+    return (Start-Process @p)
+}
+
+# обычный запуск: окно, из которого запустили (команда irm | iex, ярлык, setup.ps1), принадлежит пользователю —
+# его не закрываем и не прячем, только оставляем в нём одну строку
+if (-not $Console -and -not $Spawned) {
+    try {
+        [void](Start-PbSetupHidden $PSCommandPath (Get-PbSetupArgs) -Elevate:(-not $isAdmin))
+        Write-Host '  Tabula Rasa запущена, это окно можно закрыть.' -ForegroundColor Green
+    } catch {
+        Write-Host '  Tabula Rasa не запущена: для работы нужны права администратора. Запустите её снова и подтвердите запрос.' -ForegroundColor Yellow
+    }
+    return
+}
 if (-not $isAdmin -or -not $isSta) {
     $argList = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     if ($Selection) { $argList += @('-Selection', "`"$Selection`"") }
@@ -45,6 +83,8 @@ if (-not $isAdmin -or -not $isSta) {
 }
 
 $Host.UI.RawUI.WindowTitle = 'Tabula Rasa'
+. (Join-Path $PSScriptRoot 'lib\splash.ps1')
+if ($script:PbSpawned) { Start-PbSplash }
 
 # ---------- самая свежая версия: до загрузки lib\*.ps1 ----------
 # Клон движка всегда приводится к origin/master — другая ветка, отставание или локальные правки не повод запускать
@@ -62,7 +102,7 @@ if (-not $NoPull -and -not $engineSynced -and (Get-Command git -ErrorAction Sile
     $engineOrigin = Invoke-EngineGit remote get-url origin
     # только свой клон (в том числе старый адрес до переименования); чужой разбирает блок «старый клон» ниже
     if ($engineOrigin -match 'github\.com[/:]iheeae/(tabula-rasa|pc-base)(\.git)?/?$') {
-        Write-Host '  Проверка обновлений Tabula Rasa...' -ForegroundColor Gray
+        Set-PbSplash 'Проверка обновлений…' 0.1
         $before = Invoke-EngineGit rev-parse HEAD
         Invoke-EngineGit fetch --quiet origin master | Out-Null
         if ($LASTEXITCODE -ne 0) {
@@ -87,9 +127,21 @@ if (-not $NoPull -and -not $engineSynced -and (Get-Command git -ErrorAction Sile
                 if ($after -ne $target) {
                     $preNotices += "Не удалось обновить Tabula Rasa в $($PSScriptRoot): запущена текущая версия."
                 } elseif ($after -ne $before) {
-                    Write-Host "  Tabula Rasa обновлён: $($before.Substring(0, 7)) -> $($after.Substring(0, 7)). Перезапуск..." -ForegroundColor Green
+                    Set-PbSplash "Tabula Rasa обновлена ($($before.Substring(0, 7)) → $($after.Substring(0, 7))), запуск новой версии…" 0.2
                     $env:TR_ENGINE_SYNCED = '1'
                     $env:TR_ENGINE_NOTICE = ($preNotices -join "`n")
+                    if ($script:PbSpawned) {
+                        # новая версия — тоже скрытым процессом; своя заставка закрывается, когда появилось окно новой
+                        $child = Start-PbSetupHidden $PSCommandPath (Get-PbSetupArgs -WithPull)
+                        $until = (Get-Date).AddSeconds(30)
+                        while (-not $child.HasExited -and (Get-Date) -lt $until) {
+                            $child.Refresh()
+                            if ($child.MainWindowHandle -ne [IntPtr]::Zero) { break }
+                            Start-Sleep -Milliseconds 200
+                        }
+                        Close-PbSplash
+                        exit 0
+                    }
                     $relaunch = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
                     if ($Selection) { $relaunch += @('-Selection', $Selection) }
                     if ($DryRun) { $relaunch += '-DryRun' }
@@ -103,17 +155,21 @@ if (-not $NoPull -and -not $engineSynced -and (Get-Command git -ErrorAction Sile
     }
 }
 
-. (Join-Path $PSScriptRoot 'lib\common.ps1')
-. (Join-Path $PSScriptRoot 'lib\gui.ps1')
-. (Join-Path $PSScriptRoot 'lib\configs.ps1')
+try {
+    . (Join-Path $PSScriptRoot 'lib\common.ps1')
+    . (Join-Path $PSScriptRoot 'lib\gui.ps1')
+    . (Join-Path $PSScriptRoot 'lib\configs.ps1')
+} catch { Show-PbFatal $_ $null; exit 1 }
 $script:PB.Root = $PSScriptRoot
 if ($DataRoot) { $script:PB.DataRoot = $DataRoot }
 $EngineRepo = 'iheeae/tabula-rasa'
 $startNotices = @($preNotices)
 $windowMode = $false
 
-# загрузчик в отдельном окне: переносит или заново клонирует папку движка. Сами выходим сразу, чтобы не держать её
+# загрузчик в отдельном окне: переносит или заново клонирует папку движка. Сами выходим сразу, чтобы не держать её.
+# Это переустановка, а не обычный запуск: ход загрузчика виден в его окне, затем окно программы открывается как обычно
 function Start-PbBootstrap {
+    Close-PbSplash
     $boot = "[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/$EngineRepo/master/bootstrap.ps1 | iex"
     Start-Process powershell.exe -WorkingDirectory $env:SystemRoot -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $boot)
     Set-Location $env:SystemRoot
@@ -126,10 +182,11 @@ $newRoot = 'C:\tabula-rasa'
 if ($PSScriptRoot -eq $script:PbLegacy.Root -and -not $NoPull) {
     if (Test-Path (Join-Path $newRoot 'setup.ps1')) {
         Write-Host "  Tabula Rasa установлен в $newRoot, запуск оттуда." -ForegroundColor Yellow
-        $fwd = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$newRoot\setup.ps1`"")
+        $fwd = @()
         if ($Selection) { $fwd += @('-Selection', "`"$Selection`"") }
         if ($DataRoot) { $fwd += @('-DataRoot', "`"$DataRoot`"") }
-        Start-Process powershell.exe -WorkingDirectory $env:SystemRoot -ArgumentList $fwd
+        if ($script:PbSpawned) { Close-PbSplash; [void](Start-PbSetupHidden "$newRoot\setup.ps1" $fwd) }
+        else { Start-Process powershell.exe -WorkingDirectory $env:SystemRoot -ArgumentList (@('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$newRoot\setup.ps1`"", '-Console') + $fwd) }
     } else {
         Write-Host "  pc-base теперь называется Tabula Rasa. Загрузчик перенесёт $PSScriptRoot в $newRoot." -ForegroundColor Yellow
         Start-PbBootstrap
@@ -139,6 +196,7 @@ if ($PSScriptRoot -eq $script:PbLegacy.Root -and -not $NoPull) {
 if ($PSScriptRoot -eq $script:PbLegacy.Root) {
     $startNotices += "Tabula Rasa запущен из старой папки $($PSScriptRoot): её не удалось переименовать. Закройте окна, которые её используют, и запустите Tabula Rasa снова."
 }
+Set-PbSplash 'Перенос старых папок…' 0.3
 if (Get-Command git -ErrorAction SilentlyContinue) { Update-PbOrigin $PSScriptRoot }
 if ($PSScriptRoot -ne $script:PbLegacy.Root -and (Test-Path $script:PbLegacy.Root)) {
     $startNotices += "Найдена старая папка $($script:PbLegacy.Root). Если всё работает, её можно удалить."
@@ -189,6 +247,7 @@ try {
     # свежая версия движка подтягивается в самом начале, до загрузки lib\*.ps1 (см. «самая свежая версия»)
     # Мои данные: подтянуть с GitHub и отправить то, что не ушло в прошлый раз
     if (-not $NoPull -and (Test-PbDataConnected)) {
+        Set-PbSplash 'Синхронизация Моих данных…' 0.45
         Write-Step "Мои данные ($($script:PB.DataRoot)): синхронизация с GitHub"
         switch (Push-PbData) {
             'offline' { Write-Warn2 "нет связи с GitHub; неотправленные изменения ($((Get-PbDataState).Pending)) будут отправлены при следующем запуске" }
@@ -197,6 +256,7 @@ try {
     }
 
     # ---------- каталог ----------
+    Set-PbSplash 'Загрузка каталога…' 0.65
     $Apps = (Import-PowerShellDataFile (Join-Path $PSScriptRoot 'catalog\apps.psd1')).Apps
     # собственный каталог из «Моих данных»: только winget, ошибочные записи пропускаются
     $uc = Read-PbUserCatalog @($Apps | ForEach-Object { $_.Id })
@@ -219,9 +279,16 @@ try {
     else { Write-Host '  Мои данные не подключены (подключение — в окне, слева внизу)' -ForegroundColor Gray }
     if ($DryRun) { Write-Host '  РЕЖИМ ПРОВЕРКИ: ничего не меняется' -ForegroundColor Yellow }
     if (-not (Test-SameUserAsDesktop)) {
-        Write-Warn2 "Скрипт запущен от $env:USERNAME, а рабочий стол принадлежит другому пользователю."
-        Write-Warn2 'Настройки HKCU (Проводник, панель задач, Terminal) будут применены к профилю администратора.'
-        if ((Read-Host '    Продолжить? [y/N]') -notmatch '^[yYнН]') { return }
+        $who = "Tabula Rasa запущена от имени $env:USERNAME, а рабочий стол принадлежит другому пользователю."
+        $what = 'Настройки текущего пользователя (Проводник, панель задач, Terminal) будут применены к профилю администратора, а не к профилю того, кто работает за компьютером.'
+        Write-Warn2 $who; Write-Warn2 $what
+        if ($Console) {
+            if ((Read-Host '    Продолжить? [y/N]') -notmatch '^[yYнН]') { return }
+        } else {
+            Set-PbSplashVisible $false
+            if (-not (Show-UiMessage -Title 'Другой пользователь' -Lines @($who, @{ Text = $what; Tone = 'muted' }) -Primary 'Продолжить' -Secondary 'Выйти' -SafeDefault)) { return }
+            Set-PbSplashVisible $true
+        }
     }
 
     # ---------- окно выбора ----------
@@ -230,7 +297,8 @@ try {
         $p = Find-PbSave $Selection
         if ($p) { $initial = Read-SaveFile $p } else { Write-Warn2 "Сохранение не найдено: $Selection" }
     }
-    # список файлов окно получает само, в фоне: из релиза files «Моих данных»
+    # список файлов окно получает само, в фоне: из релиза files «Моих данных». Заставка закрывается, когда окно показано
+    Set-PbSplash 'Подготовка окна…' 0.85
     $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain -RunInWindow (-not $Console)
     if ($script:PB.WindowShownSec) { Write-Host "  Окно открылось через $($script:PB.WindowShownSec) с после запуска." -ForegroundColor DarkGray }
     # план, прогон и итог прошли в окне (lib\gui.ps1 + lib\run.ps1): журнал прогона — logs\run_<дата>.log
@@ -247,8 +315,17 @@ try {
     }
     Invoke-PbRun $plan $sel $Apps $Tweaks $null
 }
+catch {
+    # падение целиком: в окне — «Что-то пошло не так» с путём к журналу; в консоли — текст ошибки, как раньше
+    if ($Console) { throw }
+    $windowMode = $true
+    try { Stop-Transcript | Out-Null } catch { }
+    Show-PbFatal $_ $transcript
+    exit 1
+}
 finally {
-  if ($windowMode) { Stop-Transcript | Out-Null }
+  Close-PbSplash
+  if ($windowMode) { try { Stop-Transcript | Out-Null } catch { } }
   else {
     $changesFile = $null
     if ($script:PB.Changes.Count) { $changesFile = Save-Changes }
@@ -266,6 +343,7 @@ finally {
         $script:PB.Manual | Set-Content -Path (Join-Path $script:PB.LogDir "manual_$($script:PB.Stamp).txt") -Encoding UTF8
     }
     if ($changesFile) { Write-Host ''; Write-Host "  Журнал изменений: $changesFile  (откат: undo.ps1)" -ForegroundColor Gray }
+    if ($script:PB.Report) { Write-Host "  Отчёт: $($script:PB.Report)" -ForegroundColor Gray }
     Write-Host "  Журнал выполнения: $transcript" -ForegroundColor Gray
     Stop-Transcript | Out-Null
 

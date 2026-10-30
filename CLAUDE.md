@@ -40,6 +40,11 @@ Windows и файлов. Название в интерфейсе и текст�
 - **Твики и статус**: в `Apply` — только `Set-Reg` / `Set-SvcStart` / `Disable-Task` / `Remove-Appx`, тогда «уже применено»
   проверяется само (`CheckOnly`). Любая другая команда — нужен `Check = { … }` только на чтение, иначе «не проверяется».
 - **Прогон** — `lib/run.ps1`, один код для окна и `-Console`; в фоне — `$Sync`, никаких `Read-Host` (`Request-PbAnswer`).
+- **Без консоли**: обычный запуск — скрытый процесс (`setup.ps1 -Spawned`, `Start-PbSetupHidden`); шаги старта —
+  `Set-PbSplash` (`lib/splash.ps1`, не зависит от остального lib), вопросы — `Show-UiMessage`, падение — `Show-PbFatal`.
+  `Read-Host` и вывод для пользователя в консоль — только при `-Console`. Окно пользователя не закрывать и не прятать.
+- **Отчёт** — `lib/report.ps1`, один механизм для окна, `-Console` и будущего клиентского отчёта; без личного, кроме
+  имени компьютера (`Protect-PbReportText`), всё экранируется.
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
   Переезд — `Move-PbLegacyDir` / `Update-PbOrigin` в `setup.ps1` и свой в `bootstrap.ps1`; ничего не удалять.
 
@@ -80,7 +85,8 @@ grep -rniE 'IHEEAE|ilyai|ЛАНИТ|LANIT|ВИСМО|VISMO|Хваев|Khvaev|gma
 ## Карта
 ```
 bootstrap.ps1        загрузчик: winget, git, переезд C:\pc-base, клон в C:\tabula-rasa (постороннюю копию отодвигает), setup.ps1
-setup.ps1            точка входа: права, переезд старых папок, git pull, синхронизация «Моих данных», окно, прогон, итог
+setup.ps1            точка входа: скрытый перезапуск с правами, заставка, переезд старых папок, обновление, синхронизация
+                     «Моих данных», окно, прогон, итог; падение — «Что-то пошло не так»
 undo.ps1             откат по журналу изменений (ищет и в старой папке логов)
 lib/common.ps1       $script:PB (Root, DataRoot…), $script:PbLegacy, Find-PbConfig, реестр/службы/задачи с журналом, winget, установка с сайта
 lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/Remove-PbSave), Мои данные (Connect-/Disconnect-PbData, Push-PbData,
@@ -88,6 +94,8 @@ lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/R
 lib/catalog.ps1      свой каталог (Read-/Write-PbUserCatalog, Add-/Remove-PbUserApp), поиск winget (Search-PbWinget, разбор по колонкам)
 lib/status.ps1       статус: программы (реестр Uninstall → winget list, ConvertFrom-PbWingetList), твики (Get-PbTweakStatus в common.ps1)
 lib/run.ps1          план и прогон: Get-PbRunPlan (шаги по фазам), Invoke-PbRun ($Sync из окна или консоль), Get-PbChangeLogs, Invoke-PbUndo
+lib/report.ps1       отчёт о прогоне: HTML в «Документы\Tabula Rasa\Отчёты» и в logs (Write-PbReport, Protect-PbReportText)
+lib/splash.ps1       заставка в своём STA-потоке (Start-/Set-/Close-PbSplash), Show-PbFatal; грузится до остального lib
 lib/files.ps1        «Файлы»: релиз files репозитория данных (Get-PbFiles, Save-PbFiles — загрузка со сверкой SHA-256, ConvertTo-PbAssetName)
 lib/gui.ps1          окно (Show-SelectionDialog: «Установка | Снятие настроек», план/прогон/итог — RunPane), «Добавить программу»,
                      «Откат изменений» (Show-UndoDialog), значок «TR», тема (на лету, Mica, высокая контрастность), ui.json;
@@ -97,6 +105,7 @@ lib/configs.ps1      настройки программ: Export-*/Set-* по п
 catalog/apps.psd1    программы       catalog/tweaks.ps1  настройки Windows
 configs/             встроенное по умолчанию (pwsh_profile.ps1) и README с форматом «Моих данных»
 tools/               export-vivaldi.ps1 (обёртка Export-VivaldiConfig); upload-files.ps1 — файлы в релиз files, переезд с Google Drive
-tests/run.ps1        проверки без окна и без сети (winget ru/en, свой каталог, секреты, пути профиля, снятие, реестр, разметка)
+tests/run.ps1        проверки без окна и без сети (winget ru/en, свой каталог, секреты, пути профиля, снятие, реестр, разметка,
+                     план и прогон, отчёт, заставка)
 .github/workflows/   pages.yml — bootstrap.ps1 на GitHub Pages: irm iheeae.github.io/tabula-rasa | iex
 ```

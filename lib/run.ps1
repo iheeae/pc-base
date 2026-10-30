@@ -4,9 +4,12 @@
 # Шаг: @{ Key; Phase (1–7); PhaseName; Kind; Name; Ref; State = wait|run|done|skip|error; Detail; Note; Irreversible }.
 # Invoke-PbRun выполняет шаги по порядку. Из окна — в фоновом runspace с общим $Sync: State/Detail шагов,
 # $Sync.SkipCurrent (снять текущий), $Sync.StopAfter (остановить после текущего), вопросы — $Sync.Ask / $Sync.Answer
-# вместо Read-Host. Без $Sync — как раньше, в консоли.
+# вместо Read-Host. Без $Sync — как раньше, в консоли. В конце — отчёт (lib\report.ps1), путь — $Sync.Report / $script:PB.Report.
 
-$script:PbPhases = [ordered]@{
+. (Join-Path $PSScriptRoot 'report.ps1')
+
+# обычный хеш, не [ordered]: у [ordered] целое в [] — номер по порядку, а не ключ ($PbPhases[1] давал вторую фазу)
+$script:PbPhases = @{
     1 = 'Точка восстановления'; 2 = 'Настройки Windows'; 3 = 'Программы'; 4 = 'Настройки программ'
     5 = 'Файлы'; 6 = 'Среда'; 7 = 'Имя компьютера'
 }
@@ -106,6 +109,8 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
     $tw = @{}; foreach ($t in $Tweaks) { $tw[$t.Id] = $t }
     $wingetReady = $null
     $phase = 0
+    $started = Get-Date
+    $runErr = $null
     try {
         foreach ($s in $Plan) {
             if ($s.State -ne 'wait') { continue }   # уже снят (нет точки восстановления, остановка)
@@ -163,12 +168,32 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
             else { $s.State = 'done' }
         }
         if ($script:PB.NeedExplorerRestart) { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue }
+    } catch { $runErr = $_.Exception.Message; throw
     } finally {
-        if ($script:PB.Changes.Count) { [void](Save-Changes) }
+        $changesFile = $null
+        if ($script:PB.Changes.Count) { $changesFile = Save-Changes }
         if ($script:PB.Manual.Count) { $script:PB.Manual | Set-Content -Path (Join-Path $script:PB.LogDir "manual_$($script:PB.Stamp).txt") -Encoding UTF8 }
-        if ($Sync) { $Sync.NeedReboot = $script:PB.NeedReboot; $Sync.Manual = @($script:PB.Manual); $Sync.Done = $true }
+        $script:PB.Report = $null
+        try { $script:PB.Report = Write-PbReport $Plan (Get-PbReportInfo $started $changesFile $runErr) }
+        catch { Write-Warn2 "отчёт не создан: $($_.Exception.Message)" }
+        if ($Sync) { $Sync.NeedReboot = $script:PB.NeedReboot; $Sync.Manual = @($script:PB.Manual); $Sync.Report = $script:PB.Report; $Sync.Done = $true }
         $script:PB.RunSync = $null
     }
+}
+
+# сведения для отчёта о прогоне (lib\report.ps1)
+function Get-PbReportInfo ([datetime]$Started, [string]$ChangesFile, [string]$Err) {
+    $win = "Windows $($script:PB.Os)"
+    try {
+        $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        if ($cv.DisplayVersion) { $win += " $($cv.DisplayVersion)" }
+        $win += " (сборка $($cv.CurrentBuild)$(if ($null -ne $cv.UBR) { ".$($cv.UBR)" }))"
+    } catch { $win += " (сборка $([Environment]::OSVersion.Version.Build))" }
+    $engine = 'dev'
+    if (Get-Command Get-PbEngineVersion -ErrorAction SilentlyContinue) { $engine = Get-PbEngineVersion }
+    return @{ Computer = $env:COMPUTERNAME; Windows = $win; Started = $Started; Finished = (Get-Date); Engine = $engine
+        NeedReboot = [bool]$script:PB.NeedReboot; Manual = @($script:PB.Manual); ChangesFile = $ChangesFile
+        ChangesCount = @($script:PB.Changes).Count; LogDir = $script:PB.LogDir; Error = $Err }
 }
 
 # ---------- откат (undo.ps1 и окно «Откат изменений») ----------
