@@ -458,7 +458,7 @@ try {
     Check 'прогон: без точки восстановления необратимое снято, ошибка и пропуск видны' ($states -eq 'restore=skip tweak:p.a=done tweak:p.irr=skip app:a1=done app:a2=error app:a3=done config:a3=skip files=done tweak:p.post=done rename=done') $states
     Check 'прогон: спросили про необратимое, итог и флаги' (($script:Asked -join ',') -eq 'Удалить X' -and $sync.Done -and $sync.NeedReboot -and ($plan | Where-Object Key -eq 'app:a2').Detail -match 'подпись' -and $script:PB.Upgrades -contains 'a1') $sync
     $rep = [string]$sync.Report
-    $html = if ($rep -and (Test-Path $rep)) { Get-Content $rep -Encoding UTF8 -Raw -Encoding UTF8 } else { '' }
+    $html = if ($rep -and (Test-Path $rep)) { Get-Content $rep -Raw -Encoding UTF8 } else { '' }
     Check 'отчёт: в папке отчётов и копия в журналах' ($rep -like (Join-Path (Join-Path $tmp 'reports') 'report_*.html') -and
         (Test-Path (Join-Path $script:PB.LogDir (Split-Path $rep -Leaf)))) $rep
     $failBlock = if ($html -match '(?s)Что не получилось(.*?)</div>') { $Matches[1] } else { '' }
