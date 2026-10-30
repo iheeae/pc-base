@@ -21,6 +21,8 @@
 - **Режим «План» по умолчанию**: окно стартует в нём, боевой прогон — только после явного подтверждения. Не ломать.
 - Всё, что читает свои настройки, ищет их через `Find-PbConfig` (сначала `DataRoot\configs`, потом `Root\configs`);
   нет нигде — вариант «с моими настройками» недоступен, прогон не падает.
+- **Мои данные**: git в `DataRoot` — только через `lib/data.ps1`; сеть (push, вход) — только в фоне, окно не ждёт.
+  «Отключить и стереть» не трогать без нужды и не тестировать на живом входе — в тестах глушить `gh`, `cmdkey`, глобальный git.
 
 ## Проверки перед коммитом
 ```powershell
@@ -49,7 +51,8 @@ bootstrap.ps1        загрузчик: winget, git, клон в C:\pc-base (с
 setup.ps1            точка входа: права, git pull движка и своих данных, окно, прогон, итог
 undo.ps1             откат по журналу изменений
 lib/common.ps1       $script:PB (Root, DataRoot…), Find-PbConfig, реестр/службы/задачи с журналом, winget, установка с сайта, Диск
-lib/gui.ps1          окно выбора (Show-SelectionDialog), окошко файлов (Show-FilePicker), значок, тема
+lib/data.ps1         сохранения (Read-/Write-SaveFile, Save-/Rename-/Remove-PbSave), Мои данные (Connect-/Disconnect-PbData, Push-PbData)
+lib/gui.ps1          окно выбора (Show-SelectionDialog), окошко файлов (Show-FilePicker), значок, тема; фоновые задачи — runspace + DispatcherTimer
 lib/ui/              main/files/dialog.xaml, theme.xaml (стили), model.cs (модель для привязок)
 lib/configs.ps1      перенос настроек программ (функции из поля ConfigFn)
 catalog/apps.psd1    программы       catalog/tweaks.ps1  настройки Windows

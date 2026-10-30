@@ -55,9 +55,9 @@
                         <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"/>
                     </Button>
                 </Grid>
-                <Button x:Name="SetBtn" Grid.Column="2" Padding="12,0" ToolTip="Загрузить сохранённый набор галочек">
+                <Button x:Name="SetBtn" Grid.Column="2" Padding="12,0" ToolTip="Сохранённые наборы галочек: открыть, сохранить, переименовать, удалить (Ctrl+S — сохранить)">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock x:Name="SetBtnText" Text="Набор" MaxWidth="200" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="SetBtnText" Text="Сохранения" MaxWidth="240" TextTrimming="CharacterEllipsis"/>
                         <TextBlock Style="{StaticResource Glyph}" Text="&#xE70D;" FontSize="10" Margin="8,0,0,0"/>
                     </StackPanel>
                     <Button.ContextMenu>
@@ -80,12 +80,45 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <ListBox x:Name="Nav" Padding="8,0,8,8" ItemContainerStyle="{StaticResource NavItem}"
                          KeyboardNavigation.TabNavigation="Once"/>
                 <Border Grid.Row="1" BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0" Padding="8">
                     <ListBox x:Name="NavBottom" ItemContainerStyle="{StaticResource NavItem}" ScrollViewer.VerticalScrollBarVisibility="Disabled"
                              KeyboardNavigation.TabNavigation="Once"/>
+                </Border>
+                <!-- Мои данные: своя приватная репа с сохранениями и настройками программ -->
+                <Border Grid.Row="2" BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0" Padding="16,12">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock x:Name="DataIcon" Style="{StaticResource Glyph}" Text="&#xE753;" Margin="0,0,10,0" Foreground="{DynamicResource TextMuted}"/>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="Мои данные" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="DataStatus" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <Button x:Name="DataBtn" Grid.Column="2" Padding="10,0" MinWidth="0" Margin="8,0,0,0">
+                                <Button.ContextMenu>
+                                    <ContextMenu Placement="Top"/>
+                                </Button.ContextMenu>
+                            </Button>
+                        </Grid>
+                        <!-- вход в GitHub: код с устройства -->
+                        <StackPanel x:Name="DataLogin" Margin="0,12,0,0" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Text="Введи код на странице входа GitHub (он уже в буфере обмена):"/>
+                            <TextBox x:Name="DataCode" IsReadOnly="True" Margin="0,6,0,0" FontFamily="Consolas" FontSize="18" HorizontalContentAlignment="Center"/>
+                            <Button x:Name="DataOpen" Content="Открыть страницу входа" Margin="0,8,0,0" Style="{StaticResource AccentButton}"/>
+                        </StackPanel>
+                    </StackPanel>
                 </Border>
             </Grid>
 
@@ -94,9 +127,26 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <Grid Margin="24,16,24,8">
+                    <!-- уведомление: загружено, сохранено, чего нет в каталоге -->
+                    <Border x:Name="Notice" Grid.Row="0" Margin="24,16,24,0" Padding="12,0,4,0" MinHeight="40" CornerRadius="6"
+                            Background="{DynamicResource AccentSoft}" BorderBrush="{DynamicResource AccentText}" BorderThickness="1" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="NoticeIcon" Style="{StaticResource Glyph}" Text="&#xE73E;" Margin="0,0,10,0" Foreground="{DynamicResource AccentText}"/>
+                            <TextBlock x:Name="NoticeText" Grid.Column="1" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,8"/>
+                            <Button x:Name="NoticeClose" Grid.Column="2" Style="{StaticResource IconButton}" ToolTip="Скрыть">
+                                <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+                    <Grid Grid.Row="1" Margin="24,16,24,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -110,7 +160,7 @@
                             <Button x:Name="CatNone" Content="Нет" ToolTip="Снять всё в этой категории"/>
                         </StackPanel>
                     </Grid>
-                    <ListBox x:Name="List" Grid.Row="1" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
+                    <ListBox x:Name="List" Grid.Row="2" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
                              KeyboardNavigation.TabNavigation="Once">
                         <ListBox.GroupStyle>
                             <GroupStyle>
@@ -122,7 +172,7 @@
                             </GroupStyle>
                         </ListBox.GroupStyle>
                     </ListBox>
-                    <TextBlock x:Name="ListEmpty" Grid.Row="1" Style="{StaticResource Muted}" Margin="24,8" TextWrapping="Wrap"
+                    <TextBlock x:Name="ListEmpty" Grid.Row="2" Style="{StaticResource Muted}" Margin="24,8" TextWrapping="Wrap"
                                HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Collapsed"/>
                 </Grid>
             </Border>
@@ -251,7 +301,7 @@
                 </Border>
                 <TextBlock x:Name="Summary" Grid.Column="4" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="16,0,16,0"
                            TextTrimming="CharacterEllipsis"/>
-                <Button x:Name="SaveBtn" Grid.Column="5" Content="Сохранить набор…" Margin="0,0,8,0"/>
+                <Button x:Name="SaveBtn" Grid.Column="5" Content="Сохранить…" Margin="0,0,8,0" ToolTip="Сохранить текущие галочки (Ctrl+S)"/>
                 <Button x:Name="OkBtn" Grid.Column="6" MinWidth="152" IsDefault="False"/>
             </Grid>
         </Border>
