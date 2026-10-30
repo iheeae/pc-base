@@ -5,11 +5,17 @@
 # нет сети — коммит остаётся локальным, отправится при следующем запуске. Не подключены — сохранения лежат
 # в %LOCALAPPDATA%\tabula-rasa\saves, после подключения их можно перенести.
 #
+# Разметка репозитория — манифест tabula-rasa.json (format, created, engine), README, saves\, configs\, catalog\,
+# .gitignore от секретов (Install-PbDataLayout). Манифест новее движка — только чтение. Репозиторий стал публичным —
+# отправка не выполняется (Test-PbDataPrivate перед каждым push).
+#
 # Сохранение — только галочки: Apps, Tweaks, Configs (у кого выбрано «с моими настройками»), Files (имена ассетов
 # релиза files, lib\files.ps1) плюс Name, Created, Machine, Version. Настройки программ живут отдельно, в DataRoot\configs.
 
 $script:PbSaveVersion = 1
 $script:PbDataRepoName = 'tabula-rasa-private'
+$script:PbLayoutFormat = 1          # версия разметки репозитория данных; больше — новее движка, только чтение
+$script:PbManifest = 'tabula-rasa.json'
 
 function Get-PbLocalSaveDir { Join-Path $env:LOCALAPPDATA 'tabula-rasa\saves' }
 function Test-PbDataConnected { Test-Path (Join-Path $script:PB.DataRoot '.git') }
@@ -24,6 +30,23 @@ function Invoke-PbGit {
     try { $out = @(& git -C $script:PB.DataRoot @args 2>&1 | ForEach-Object { "$_" }) }
     finally { $ErrorActionPreference = $prev }
     return @{ Code = $LASTEXITCODE; Out = $out }
+}
+
+# gh: возвращает @{ Code; Out }, stderr — строками вместе с выводом
+function Invoke-PbGh {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $out = @(& gh @args 2>&1 | ForEach-Object { "$_" }) }
+    finally { $ErrorActionPreference = $prev }
+    return @{ Code = $LASTEXITCODE; Out = $out }
+}
+
+# понятный текст ошибки gh: нет сети, нет входа, нет доступа
+function Get-PbGhError ([string[]]$Out, [string]$What) {
+    $t = (@($Out) | Where-Object { $_ }) -join ' '
+    if ($t -match 'dial tcp|timeout|no such host|connection|socket|network') { return "Нет связи с GitHub. $t" }
+    if ($t -match 'auth login|not logged|HTTP 401|authentication') { return "Вход в GitHub CLI не выполнен: подключите «Мои данные» заново. $t" }
+    if ($t -match 'HTTP 403') { return "Нет доступа к репозиторию. $t" }
+    return "$What $t".Trim()
 }
 
 # ---------- файлы сохранений ----------
@@ -100,9 +123,10 @@ function Get-FreeSavePath ([string]$Dir, [string]$Name, [string]$Except) {
     return $p
 }
 
-# коммит изменений в saves\ своих данных; отправка — отдельно (Push-PbData), чтобы окно не ждало сеть
-function Save-PbDataCommit ([string]$Message) {
-    [void](Invoke-PbGit add -A -- saves)
+# коммит изменений своих данных ($Paths — внутри DataRoot); отправка — отдельно (Push-PbData), чтобы окно не ждало сеть
+function Save-PbDataCommit ([string]$Message, [string[]]$Paths = @('saves')) {
+    Assert-PbDataWritable
+    [void](Invoke-PbGit add -A -- @Paths)
     $r = Invoke-PbGit commit -q -m $Message
     if ($r.Code -ne 0 -and ($r.Out -join "`n") -notmatch 'nothing (added )?to commit|no changes added to commit') {
         throw "git commit: $($r.Out -join ' ')"
@@ -111,6 +135,7 @@ function Save-PbDataCommit ([string]$Message) {
 
 # сохранить текущее: одноимённое перезаписывается (это «обновить сохранение»). Возвращает путь
 function Save-PbSave ([string]$Name, [hashtable]$Sel) {
+    if (Test-PbDataConnected) { Assert-PbDataWritable }
     $dir = Get-PbSaveDir
     $p = Join-Path $dir (ConvertTo-SaveFileName $Name)
     Write-SaveFile $p $Sel $Name
@@ -119,6 +144,7 @@ function Save-PbSave ([string]$Name, [hashtable]$Sel) {
 }
 
 function Rename-PbSave ([string]$Path, [string]$NewName) {
+    if (Test-PbDataConnected) { Assert-PbDataWritable }
     $s = Read-SaveFile $Path
     $dir = Split-Path $Path
     $np = Get-FreeSavePath $dir $NewName $Path
@@ -130,6 +156,7 @@ function Rename-PbSave ([string]$Path, [string]$NewName) {
 }
 
 function Remove-PbSave ([string]$Path) {
+    if (Test-PbDataConnected) { Assert-PbDataWritable }
     $name = [IO.Path]::GetFileNameWithoutExtension($Path)
     try { $name = (Read-SaveFile $Path).Name } catch { }
     Remove-Item $Path -Force
@@ -140,6 +167,7 @@ function Remove-PbSave ([string]$Path) {
 function Move-PbLocalSaves {
     $local = @(Get-PbSaves -LocalOnly)
     if (-not $local.Count -or -not (Test-PbDataConnected)) { return 0 }
+    Assert-PbDataWritable
     $dir = Join-Path $script:PB.DataRoot 'saves'
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     foreach ($s in $local) {
@@ -171,9 +199,22 @@ function Get-PbDataState {
     return $st
 }
 
-# git pull --rebase + push; нет сети — коммиты остаются и уйдут в следующий раз. Возвращает $true, если всё отправлено
+# 'private' | 'public' | 'unknown' (нет сети, нет gh). Публичный репозиторий данных опасен: в настройках программ
+# бывают личные данные
+function Test-PbDataPrivate ([string]$Repo) {
+    if (-not $Repo) { $Repo = Get-PbDataRepo }
+    if (-not $Repo -or -not (Get-Command gh -ErrorAction SilentlyContinue)) { return 'unknown' }
+    $r = Invoke-PbGh api "repos/$Repo" --jq .private
+    if ($r.Code -ne 0) { return 'unknown' }
+    switch (($r.Out | Select-Object -First 1)) { 'true' { return 'private' } 'false' { return 'public' } }
+    return 'unknown'
+}
+
+# git pull --rebase + push. 'ok' — всё отправлено; 'offline' — нет сети (коммиты уйдут в следующий раз);
+# 'public' — репозиторий стал публичным, отправка не выполнялась
 function Push-PbData {
-    if (-not (Test-PbDataConnected)) { return $true }
+    if (-not (Test-PbDataConnected)) { return 'ok' }
+    Update-PbPath
     # клон мог остаться на другой ветке (проверка PR и т.п.) — тогда сохранения уходили бы не туда.
     # Без незакоммиченных изменений возвращаемся на основную ветку репозитория; с ними — не трогаем.
     $def = 'master'
@@ -182,8 +223,187 @@ function Push-PbData {
     $cur = "$((Invoke-PbGit symbolic-ref --short -q HEAD).Out | Select-Object -First 1)"
     if ($cur -ne $def -and -not (Invoke-PbGit status --porcelain).Out) { [void](Invoke-PbGit checkout -q $def) }
     [void](Invoke-PbGit pull -q --rebase)
-    $r = Invoke-PbGit push -q
-    return $r.Code -eq 0
+    $vis = Test-PbDataPrivate
+    if ($vis -eq 'public') { return 'public' }
+    if ($vis -ne 'private') { return 'offline' }
+    $r = Invoke-PbGit push -q -u origin HEAD
+    if ($r.Code -eq 0) { return 'ok' }
+    return 'offline'
+}
+
+function Get-PbPublicWarning ([string]$Repo) {
+    "Репозиторий $Repo стал публичным, поэтому изменения не отправляются в GitHub: в настройках программ бывают личные данные. Сделайте репозиторий приватным (Settings → General → Change visibility). Изменения сохранены на этом компьютере."
+}
+
+# последний коммит, затронувший путь в «Моих данных»: @{ Date; Machine } (компьютер — из «… (PC-01)» в конце сообщения) или $null
+function Get-PbDataLastChange ([string]$Rel) {
+    if (-not (Test-PbDataConnected)) { return $null }
+    $r = Invoke-PbGit log -1 --format=%cI%x09%s -- ($Rel -replace '\\', '/')
+    $l = $r.Out | Select-Object -First 1
+    if ($r.Code -ne 0 -or $l -notmatch '^(\S+)\t(.*)$') { return $null }
+    $d = $null
+    try { $d = [datetime]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) } catch { }
+    $m = if ($Matches[2] -match '\(([^()]+)\)\s*$') { $Matches[1] } else { '' }
+    return @{ Date = $d; Machine = $m }
+}
+
+# коммит снятых настроек: «Настройки: Vivaldi, VS Code (PC-01)»
+function Save-PbConfigCommit ([string[]]$Names) {
+    Save-PbDataCommit "Настройки: $($Names -join ', ') ($env:COMPUTERNAME)" @('configs')
+}
+
+# ---------- разметка репозитория данных ----------
+
+function Get-PbEngineVersion {
+    if ($script:PB.Root -and (Get-Command git -ErrorAction SilentlyContinue)) {
+        $v = & git -C $script:PB.Root describe --tags --always 2>$null | Select-Object -First 1
+        if ($v) { return [string]$v }
+    }
+    return 'dev'
+}
+
+# манифест или $null
+function Read-PbManifest {
+    $p = Join-Path $script:PB.DataRoot $script:PbManifest
+    if (-not (Test-Path $p)) { return $null }
+    try { return (Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return [pscustomobject]@{ format = -1 } }
+}
+
+# 'ok' | 'empty' (новый репозиторий: создать разметку) | 'foreign' (есть чужие файлы, манифеста нет: только добавить
+# недостающее) | 'old' (разметка старее движка: миграция) | 'new' (новее движка: только чтение) | 'broken' (манифест не читается)
+function Get-PbDataLayout {
+    if (-not (Test-PbDataConnected)) { return 'none' }
+    $m = Read-PbManifest
+    if ($m) {
+        $f = 0; [void][int]::TryParse([string]$m.format, [ref]$f)
+        if ($f -lt 1) { return 'broken' }
+        if ($f -gt $script:PbLayoutFormat) { return 'new' }
+        if ($f -lt $script:PbLayoutFormat) { return 'old' }
+        return 'ok'
+    }
+    $files = @((Invoke-PbGit ls-files).Out | Where-Object { $_ })
+    $other = @($files | Where-Object { $_ -ne 'README.md' })
+    $readme = Join-Path $script:PB.DataRoot 'README.md'
+    $short = -not (Test-Path $readme) -or @(Get-Content $readme -Encoding UTF8 | Where-Object { $_.Trim() }).Count -le 2
+    if (-not $other.Count -and $short) { return 'empty' }
+    return 'foreign'
+}
+
+function Test-PbDataReadOnly { (Get-PbDataLayout) -eq 'new' }
+
+function Assert-PbDataWritable {
+    if (Test-PbDataReadOnly) {
+        throw 'Разметка «Моих данных» создана более новой версией Tabula Rasa. Обновите программу: до обновления изменения в «Моих данных» не сохраняются.'
+    }
+}
+
+$script:PbGitignore = @('*.key', '*.pem', '*.pfx', '*.p12', '*.ovpn', '*.kdbx', '*.kdb', 'id_rsa*', 'id_ed25519*', '.env',
+    'Login Data*', 'Cookies*', 'Web Data*', '*.sqlite', '*.sqlite-wal', '*.sqlite-shm', '*.db', '*.log', '*.bak')
+
+function Get-PbDataReadme {
+    @'
+# Мои данные Tabula Rasa
+
+Приватный репозиторий с личными данными для [Tabula Rasa](https://github.com/iheeae/tabula-rasa).
+Репозиторий создан программой и должен оставаться приватным: в настройках программ бывают личные данные.
+Если репозиторий станет публичным, Tabula Rasa перестанет отправлять в него изменения.
+
+| Расположение | Содержимое |
+|---|---|
+| `saves/` | сохранения отметок окна (JSON) |
+| `configs/` | настройки программ, снятые на вкладке «Снятие настроек» |
+| `catalog/apps.psd1` | собственный каталог программ сверх встроенного |
+| релиз `files` | файлы раздела «Файлы» |
+| `tabula-rasa.json` | служебный файл: версия разметки |
+
+Изменения вносятся из окна Tabula Rasa, каждое изменение фиксируется отдельным коммитом. Другие файлы и папки
+программа не использует и не изменяет.
+
+## Подключение на другом компьютере
+Запустите Tabula Rasa в PowerShell от имени администратора командой `irm iheeae.github.io/tabula-rasa | iex`,
+слева внизу выберите «Подключить» и войдите в ту же учётную запись GitHub. Репозиторий будет клонирован
+в `C:	abula-rasa-private`.
+'@
+}
+
+function Get-PbEmptyCatalog {
+    @'
+# Собственный каталог программ Tabula Rasa: дополняет встроенный. Записи добавляются из окна («Добавить программу»).
+# Только winget и поля описания: Id, Name, Desc, Category, Source = 'winget', WingetId, Scope, Interactive, Note, Manual,
+# OpenSource, License. Записи с ошибками и другими полями пропускаются.
+@{
+    Apps = @(
+    )
+}
+'@
+}
+
+# что добавит разметка: @{ Rel; Text; Bom; Append } (Append — строки в конец существующего .gitignore).
+# $Fresh — новый репозиторий: README программы заменяет README, созданный GitHub
+function Get-PbLayoutPlan ([switch]$Fresh) {
+    $root = $script:PB.DataRoot
+    $plan = @()
+    if ($Fresh -or -not (Test-Path (Join-Path $root 'README.md'))) { $plan += @{ Rel = 'README.md'; Text = (Get-PbDataReadme) } }
+    foreach ($d in 'saves', 'configs') {
+        $dir = Join-Path $root $d
+        if (-not (Test-Path $dir) -or -not @(Get-ChildItem $dir -Force).Count) { $plan += @{ Rel = "$d/.gitkeep"; Text = '' } }
+    }
+    if (-not (Test-Path (Join-Path (Join-Path $root 'catalog') 'apps.psd1'))) { $plan += @{ Rel = 'catalog/apps.psd1'; Text = (Get-PbEmptyCatalog); Bom = $true } }
+    $gi = Join-Path $root '.gitignore'
+    if (Test-Path $gi) {
+        $have = @(Get-Content $gi -Encoding UTF8 | ForEach-Object { $_.Trim() })
+        $add = @($script:PbGitignore | Where-Object { $have -notcontains $_ })
+        if ($add.Count) { $plan += @{ Rel = '.gitignore'; Append = $add } }
+    } else {
+        $plan += @{ Rel = '.gitignore'; Text = ((@('# Tabula Rasa: защита от случайной отправки секретов') + $script:PbGitignore) -join "`n") + "`n" }
+    }
+    return $plan
+}
+
+# строки для подтверждения: что будет добавлено
+function Format-PbLayoutPlan ($Plan) {
+    foreach ($p in $Plan) {
+        if ($p.Append) { "$($p.Rel): строки $($p.Append -join ', ')" }
+        else { $p.Rel }
+    }
+    $script:PbManifest
+}
+
+# записать план и манифест одним коммитом «Разметка Tabula Rasa». Ничего не удаляет и не перезаписывает,
+# кроме README нового репозитория (план с -Fresh)
+function Install-PbDataLayout ($Plan) {
+    $root = $script:PB.DataRoot
+    $paths = @()
+    foreach ($p in $Plan) {
+        $f = Join-Path $root ($p.Rel -replace '/', [IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path $f) -Force | Out-Null
+        if ($p.Append) {
+            $cur = [IO.File]::ReadAllText($f)
+            $sep = if ($cur -and -not $cur.EndsWith("`n")) { "`n" } else { '' }
+            [IO.File]::WriteAllText($f, $cur + $sep + "# Tabula Rasa: защита от случайной отправки секретов`n" + ($p.Append -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+        } else {
+            [IO.File]::WriteAllText($f, ($p.Text -replace "`r?`n", "`n"), (New-Object Text.UTF8Encoding ([bool]$p.Bom)))
+        }
+        $paths += $p.Rel
+    }
+    $m = [ordered]@{ format = $script:PbLayoutFormat; created = (Get-Date).ToString('s', [Globalization.CultureInfo]::InvariantCulture); engine = (Get-PbEngineVersion) }
+    [IO.File]::WriteAllText((Join-Path $root $script:PbManifest), ($m | ConvertTo-Json) + "`n", (New-Object Text.UTF8Encoding $false))
+    [void](Invoke-PbGit add -A -- @($paths + $script:PbManifest))
+    $r = Invoke-PbGit commit -q -m 'Разметка Tabula Rasa'
+    if ($r.Code -ne 0) { throw "git commit: $($r.Out -join ' ')" }
+}
+
+# разметка старее движка: миграции по шагам, каждая — своим коммитом. Пока формат один (1), шагов нет
+function Update-PbDataLayout {
+    $m = Read-PbManifest
+    $f = [int]$m.format
+    while ($f -lt $script:PbLayoutFormat) {
+        switch ($f) {
+            # 1 { … перенос файлов в новое место …; $msg = 'Разметка Tabula Rasa: формат 2 (…)' }
+            default { throw "Нет миграции разметки с формата $f." }
+        }
+        $f++
+    }
 }
 
 # ---------- подключение ----------
@@ -260,6 +480,7 @@ function Connect-PbData ($Sync) {
         & git clone -q "https://github.com/$repo.git" $script:PB.DataRoot 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать $repo." }
     }
+    if ((Test-PbDataPrivate $repo) -eq 'public') { $Sync.Public = $repo }
     [void](Invoke-PbGit config user.name $login)
     [void](Invoke-PbGit config user.email "$id+$login@users.noreply.github.com")
     [void](Invoke-PbGit config core.quotepath false)

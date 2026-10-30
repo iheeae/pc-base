@@ -28,7 +28,8 @@ namespace PcBase
         public string Tone { get; set; }
     }
 
-    // пункт каталога: программа (app), настройка (tweak), файл из релиза files «Моих данных» (file)
+    // пункт каталога: программа (app), настройка (tweak), файл из релиза files «Моих данных» (file),
+    // программа на вкладке «Снятие настроек» (capture), результат поиска winget в окне «Добавить программу» (found)
     public class Item : Bindable
     {
         public Item() { Facts = new List<Fact>(); }
@@ -47,6 +48,7 @@ namespace PcBase
         public bool Irreversible { get; set; }
         public bool IsWeb { get; set; }
         public bool OpenSource { get; set; }      // бейдж «Open source»
+        public bool IsMine { get; set; }          // из собственного каталога «Моих данных»: бейдж «мой каталог», можно удалить
         public bool HasConfig { get; set; }
         // файл настроек нашёлся (в своих данных или в движке); нет — «с моими» не включается
         private bool _cfgAvail = true;

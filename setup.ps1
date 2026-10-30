@@ -185,11 +185,18 @@ try {
     # Мои данные: подтянуть с GitHub и отправить то, что не ушло в прошлый раз
     if (-not $NoPull -and (Test-PbDataConnected)) {
         Write-Step "Мои данные ($($script:PB.DataRoot)): синхронизация с GitHub"
-        if (-not (Push-PbData)) { Write-Warn2 "нет связи с GitHub; неотправленные изменения ($((Get-PbDataState).Pending)) будут отправлены при следующем запуске" }
+        switch (Push-PbData) {
+            'offline' { Write-Warn2 "нет связи с GitHub; неотправленные изменения ($((Get-PbDataState).Pending)) будут отправлены при следующем запуске" }
+            'public'  { $w = Get-PbPublicWarning (Get-PbDataRepo); Write-Warn2 $w; $startNotices += $w }
+        }
     }
 
     # ---------- каталог ----------
     $Apps = (Import-PowerShellDataFile (Join-Path $PSScriptRoot 'catalog\apps.psd1')).Apps
+    # собственный каталог из «Моих данных»: только winget, ошибочные записи пропускаются
+    $uc = Read-PbUserCatalog @($Apps | ForEach-Object { $_.Id })
+    $Apps = @($Apps) + @($uc.Apps)
+    if ($uc.Errors.Count) { $startNotices += "Собственный каталог: пропущено записей с ошибками: $($uc.Errors.Count) ($($uc.Errors -join '; '))." }
     . (Join-Path $PSScriptRoot 'catalog\tweaks.ps1')
     Get-EnvInfo
     # всё, что не подходит к этой версии Windows, отсекается сразу — в меню и окне его не видно
@@ -225,7 +232,7 @@ try {
     $newName = $sel.Name
 
     $selApps = @($Apps | Where-Object { $sel.Apps -contains $_.Id })
-    $selCfg = @($Apps | Where-Object { $_.ConfigFn -and $sel.Configs -contains $_.Id })
+    $selCfg = @($Apps | Where-Object { $_.Config -and $_.Config.Import -and $sel.Configs -contains $_.Id })
     $preTw = @($Tweaks | Where-Object { $_.Phase -ne 'post' -and $sel.Tweaks -contains $_.Id })
     $postTw = @($Tweaks | Where-Object { $_.Phase -eq 'post' -and $sel.Tweaks -contains $_.Id })
 
@@ -233,7 +240,7 @@ try {
         Write-Step 'Будет сделано'
         $preTw | ForEach-Object { Write-Host "    твик:      $($_.Name)$(if ($_.Irreversible) { '   [необратимо]' })" }
         $selApps | ForEach-Object { Write-Host "    программа: $($_.Name) [$($_.Source)]" }
-        $selCfg | ForEach-Object { Write-Host "    настройки: $($_.Name) — $($_.ConfigName)" }
+        $selCfg | ForEach-Object { Write-Host "    настройки: $($_.Name) — с моими настройками" }
         $sel.FileTitles | ForEach-Object { Write-Host "    файл:      $_" }
         $postTw | ForEach-Object { Write-Host "    после:     $($_.Name)" }
         if ($newName) { Write-Host "    имя:       $newName" }
@@ -274,8 +281,8 @@ try {
     if ($selCfg) {
         Write-Step 'Настройки программ'
         foreach ($a in $selCfg) {
-            Write-Host "  - $($a.Name): $($a.ConfigName)" -ForegroundColor White
-            try { & $a.ConfigFn } catch { Write-Fail $_.Exception.Message; Add-Result "$($a.Name): $($a.ConfigName)" 'ОШИБКА' $_.Exception.Message }
+            Write-Host "  - $($a.Name): с моими настройками" -ForegroundColor White
+            try { & $a.Config.Import } catch { Write-Fail $_.Exception.Message; Add-Result "$($a.Name): мои настройки" 'ОШИБКА' $_.Exception.Message }
         }
     }
 

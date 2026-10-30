@@ -8,26 +8,36 @@
 
 ```
 C:\tabula-rasa-private\
-  configs\
-    pwsh_profile.ps1        собственный профиль PowerShell 7, заменяет встроенный
-    vivaldi\prefs.json      настройки Vivaldi для варианта «с моими настройками»
+  tabula-rasa.json          версия разметки (создаёт Tabula Rasa)
+  README.md, .gitignore     создаются в новом репозитории; в существующем — только если их нет
   saves\*.json              сохранения (Version, Name, Created, Machine, Apps, Tweaks, Configs, Files)
+  catalog\apps.psd1         собственный каталог программ (только winget и поля описания)
+  configs\
+    pwsh_profile.ps1        профиль PowerShell 7, заменяет встроенный
+    vivaldi\prefs.json      Vivaldi: поддерево vivaldi из Preferences
+    wt\settings.json        Windows Terminal
+    vscode\                 settings.json, keybindings.json, extensions.txt
+    npp\                    Notepad++: config.xml без истории и сеансов, shortcuts.xml, stylers.xml, contextMenu.xml
+    flow\Settings.json      Flow Launcher
+    everything\Everything.ini
+    powertoys\              settings.json общий и модулей
+    git\gitconfig           .gitconfig без [credential] и http.extraheader
 ```
 
 Файлы раздела «Файлы» хранятся не в папках репозитория, а ассетами его релиза `files` (`tools/upload-files.ps1`);
 в сохранении поле `Files` содержит имена ассетов.
 
-Tabula Rasa ищет каждый файл сначала в «Моих данных», затем здесь. Если файла нет ни там, ни там, вариант
+Tabula Rasa ищет каждый файл настроек сначала в «Моих данных», затем здесь. Если файла нет ни там, ни там, вариант
 «с моими настройками» в окне недоступен (с пояснением), а выполнение продолжается.
 
 ## Снятие настроек
-- **Vivaldi:** на настроенном компьютере выполнить
-  `powershell -ExecutionPolicy Bypass -File C:\tabula-rasa\tools\export-vivaldi.ps1`.
-  Сохраняется только поддерево `vivaldi` из `Preferences` (интерфейс, панели, вкладки, поведение); всё, что относится
-  к учётным записям, почте, синхронизации, токенам и паролям, исключается, расширения не затрагиваются.
-  Файл записывается в `C:\tabula-rasa-private\configs\vivaldi\prefs.json`, если папка «Моих данных» существует,
-  иначе — рядом со скриптом. Перед коммитом файл следует просмотреть.
+Режим окна «Снятие настроек» на настроенном компьютере: выбрать программы, проверить изменения, подтвердить.
+Строки и ключи, похожие на пароли, токены, cookies и сеансы, а также длинные base64-значения вырезаются до записи.
+Для Vivaldi есть и консольный вариант: `powershell -ExecutionPolicy Bypass -File C:\tabula-rasa\tools\export-vivaldi.ps1`
+(файл записывается в «Мои данные», коммит выполняется вручную).
 
 ## Добавление программы с переносом настроек
-Функция в `lib/configs.ps1` и поля `ConfigFn`, `ConfigFile`, `ConfigName`, `ConfigDesc` в `catalog/apps.psd1`;
-инструмент снятия настроек — в `tools/`. Секреты (пароли, токены, ключи, учётные данные) в снимок попадать не должны.
+Поле `Config` в `catalog/apps.psd1` (`File`, `From`, `Export`, `Import`, `Desc`, `Skip`) и две функции в `lib/configs.ps1`:
+`Export-<Программа>Config <папка configs>` возвращает `@{ Files; Removed }`, `Set-<Программа>Config` применяет сохранённое.
+Общие помощники: `Export-PbConfigFile` (файл с фильтром секретов), `Get-PbSavedConfig`, `Copy-PbConfigIn` (с копией `.bak`),
+`Stop-PbApp`. Секреты (пароли, токены, ключи, учётные данные) в снимок попадать не должны; проверка — `tests\run.ps1`.

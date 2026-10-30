@@ -14,4 +14,4 @@ secrets/
 
 # Свои настройки программ живут в приватных данных, не в движке
 configs/vivaldi/prefs.json
-tools/vivaldi_prefs.json
+tools/configs/

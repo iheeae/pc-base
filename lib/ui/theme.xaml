@@ -402,6 +402,10 @@
                                         ToolTip="Не отменяется через undo.ps1, только точкой восстановления">
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
                                 </Border>
+                                <Border Style="{StaticResource Pill}" Visibility="{Binding IsMine, Converter={StaticResource Vis}}"
+                                        ToolTip="Программа из собственного каталога («Мои данные»)">
+                                    <TextBlock Text="мой каталог" VerticalAlignment="Center"/>
+                                </Border>
                                 <Border Style="{StaticResource Pill}" Visibility="{Binding OpenSource, Converter={StaticResource Vis}}"
                                         ToolTip="Открытый исходный код">
                                     <TextBlock Text="Open source" VerticalAlignment="Center"/>
