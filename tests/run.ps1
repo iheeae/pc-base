@@ -338,6 +338,86 @@ try {
     $s2 = Get-PbAppStatus $git $entries $w; $s3 = Get-PbAppStatus $vs $entries $w
     Check 'шаг 2 (winget): обновление с версиями, нет в winget и реестре — не установлено' ($s2.Kind -eq 'update' -and $s2.Text -eq 'обновление: 2.46.0 → 2.47.1' -and $s3.Kind -eq 'missing') @($s2, $s3)
 
+    # ---------- «уже было» и «изменено»: запись только при отличии (чтение и запись подменены) ----------
+    Write-Host 'уже было и изменено'
+    $script:PB.Changes.Clear(); $script:PB.Actions.Clear(); $script:PB.Results.Clear(); $script:PB.LogDir = Join-Path $tmp 'logs0'
+    & {
+        $script:Reg = @{ 'HKCU:\T|A' = @{ Exists = $true; Value = 1; Kind = 'DWord' }; 'HKCU:\T|B' = @{ Exists = $true; Value = '1'; Kind = 'String' } }
+        $script:Writes = New-Object System.Collections.ArrayList
+        function Get-PbRegValue ($Path, $Name) { $v = $script:Reg["$Path|$Name"]; if ($v) { $v } else { @{ Exists = $false; Value = $null } } }
+        function Test-Path { $true }
+        function New-Item { }
+        function New-ItemProperty ($Path, $Name, $Value, $PropertyType) { [void]$script:Writes.Add("$Name=$Value"); $script:Reg["$Path|$Name"] = @{ Exists = $true; Value = $Value; Kind = $PropertyType } }
+        Set-Reg 'HKCU:\T' 'A' 1
+        Check 'Set-Reg: то же значение — не пишется, в журнал не попадает' ($script:Writes.Count -eq 0 -and $script:PB.Changes.Count -eq 0 -and $script:PB.Actions.Count -eq 1 -and -not $script:PB.Actions[0].Changed) $script:PB.Actions
+        Set-Reg 'HKCU:\T' 'A' 0
+        Check 'Set-Reg: другое значение — пишется, в журнале «было 1»' ($script:Writes -contains 'A=0' -and $script:PB.Changes.Count -eq 1 -and $script:PB.Changes[0].Old -eq 1 -and
+            $script:PB.Actions[1].Changed -and $script:PB.Actions[1].Old -eq '1' -and $script:PB.Actions[1].New -eq '0') $script:PB.Actions[1]
+        Set-Reg 'HKCU:\T' 'B' 1
+        Check 'Set-Reg: то же число, но строкой — переписывается в DWord' ($script:Writes -contains 'B=1' -and $script:PB.Changes.Count -eq 2)
+        Set-Reg 'HKCU:\T' 'C' 'x' 'String'
+        Check 'Set-Reg: значения не было — «нет → x»' ($script:PB.Actions[3].Old -eq 'нет' -and $script:PB.Actions[3].New -eq 'x' -and -not $script:PB.Changes[2].OldExists)
+
+        $script:Svc = 'Disabled'; $script:SvcSet = $null
+        function Get-PbSvcMode ($Name) { $script:Svc }
+        function Get-Service { [pscustomobject]@{ Status = 'Stopped' } }
+        function Set-Service ($Name, $StartupType) { $script:SvcSet = $StartupType }
+        $n = $script:PB.Changes.Count
+        Set-SvcStart 'DiagTrack' 'Disabled'
+        Check 'Set-SvcStart: уже отключена — не трогается' ($null -eq $script:SvcSet -and $script:PB.Changes.Count -eq $n -and $script:PB.Actions[-1].New -eq 'отключена' -and -not $script:PB.Actions[-1].Changed)
+        $script:Svc = 'Auto'
+        Set-SvcStart 'DiagTrack' 'Disabled'
+        Check 'Set-SvcStart: была «автоматически» — отключена, в журнале' ($script:SvcSet -eq 'Disabled' -and $script:PB.Changes[-1].Old -eq 'Auto' -and $script:PB.Actions[-1].Old -eq 'автоматически')
+
+        $script:Task = 'Disabled'; $script:TaskOff = 0
+        function Get-PbTaskState ($TaskPath, $TaskName) { $script:Task }
+        function Disable-ScheduledTask { $script:TaskOff++ }
+        $n = $script:PB.Changes.Count
+        Disable-Task '\X\' 'T1'
+        Check 'Disable-Task: уже отключена — не трогается, в журнал не попадает' ($script:TaskOff -eq 0 -and $script:PB.Changes.Count -eq $n)
+        $script:Task = 'Ready'
+        Disable-Task '\X\' 'T1'
+        Check 'Disable-Task: включённая — отключена, в журнале' ($script:TaskOff -eq 1 -and $script:PB.Changes[-1].WasEnabled)
+
+        # итог твика
+        $script:Reg = @{ 'HKCU:\T|A' = @{ Exists = $true; Value = 1; Kind = 'DWord' }; 'HKCU:\T|B' = @{ Exists = $true; Value = 1; Kind = 'DWord' } }
+        $script:PB.Results.Clear()
+        Invoke-Tweak @{ Name = 'Т1'; Apply = { Set-Reg 'HKCU:\T' 'A' 1; Set-Reg 'HKCU:\T' 'B' 1 }; Manual = 'не нужно' } 6>$null
+        Invoke-Tweak @{ Name = 'Т2'; Apply = { Set-Reg 'HKCU:\T' 'A' 1; Set-Reg 'HKCU:\T' 'B' 0 } } 6>$null
+        Invoke-Tweak @{ Name = 'Т3'; Apply = { Set-Reg 'HKCU:\T' 'C' 1 } } 6>$null
+        $script:ApplyRan = $false
+        Invoke-Tweak @{ Name = 'Т4'; Check = { $true }; Apply = { $script:ApplyRan = $true } } 6>$null
+        $r = @($script:PB.Results | ForEach-Object { "$($_.'Что')=$($_.'Статус')/$($_.'Детали')" }) -join ' | '
+        Check 'твик: «уже было», «изменено 1 из 2», «применено», Check выполнен — Apply не запускается' (
+            $r -eq 'Т1=уже было/ | Т2=применено/изменено 1 из 2, остальное уже было | Т3=применено/ | Т4=уже было/' -and -not $script:ApplyRan -and -not $script:PB.Manual.Contains('Т1: не нужно')) $r
+        $st = Get-PbStepState @($script:PB.Results[0])
+        $st2 = Get-PbStepState @($script:PB.Results[1])
+        Check 'шаг: «уже было» — состояние same, частично — done с подробностью' ($st.State -eq 'same' -and $st2.State -eq 'done' -and $st2.Detail -match 'изменено 1 из 2') @($st, $st2)
+
+        # программы: версии из winget list до и после, коды «уже установлено» и «новее нет»
+        $script:Ver = @{}; $script:Code = 0
+        function Invoke-PbWingetTimed ($WingetArgs) {
+            if ($WingetArgs[0] -eq 'list') {
+                $v = $script:Ver[$WingetArgs[2]]
+                if (-not $v) { return @{ Code = -1978335212; Out = @() } }
+                return @{ Code = 0; Out = @('Name    Id       Version  Available Source', '-----------------------------------------', ('Prog    {0,-8} {1,-8} {2,-9} winget' -f $WingetArgs[2], $v[0], $v[1])) }
+            }
+            $id = $WingetArgs[2]
+            if ($script:Code -eq 0) { $script:Ver[$id] = @($script:NewVer, '') }
+            return @{ Code = $script:Code; Log = 'x.log' }
+        }
+        $script:PB.Results.Clear(); $script:PB.Upgrades = @('u2', 'u3')
+        $script:Ver['A.One'] = @('1.2', ''); $script:Ver['A.Two'] = @('1.0', '1.1'); $script:Ver['A.Thr'] = @('3.0', '')
+        Install-WingetApp @{ Id = 'u1'; Name = 'П1'; WingetId = 'A.One' } 6>$null
+        $script:NewVer = '1.1'; Install-WingetApp @{ Id = 'u2'; Name = 'П2'; WingetId = 'A.Two' } 6>$null
+        $script:Code = -1978335189; Install-WingetApp @{ Id = 'u3'; Name = 'П3'; WingetId = 'A.Thr' } 6>$null
+        $script:Code = 0; $script:NewVer = '2.0'; Install-WingetApp @{ Id = 'u4'; Name = 'П4'; WingetId = 'A.New' } 6>$null
+        $r = @($script:PB.Results | ForEach-Object { "$($_.'Что')=$($_.'Статус')/$($_.'Детали')" }) -join ' | '
+        Check 'программы: уже установлено (версия), обновлено (было → стало), новее нет, установлено (версия)' (
+            $r -eq 'П1=уже установлено/версия 1.2 | П2=обновлено/1.0 → 1.1 | П3=уже установлено/версия 3.0, новее нет | П4=установлено/версия 2.0') $r
+    }
+    $script:PB.Upgrades = @(); $script:PB.Actions.Clear(); $script:PB.Manual.Clear()
+
     # ---------- план и прогон (установка, твики и вопрос подменены) ----------
     Write-Host 'план и прогон'
     $script:PB.Results.Clear(); $script:PB.Manual.Clear(); $script:PB.Changes.Clear(); $script:PB.DataRoot = Join-Path $tmp 'nodata'
@@ -388,8 +468,16 @@ try {
         Check 'отчёт: пути профиля — переменными, имя пользователя скрыто' ($p1 -eq '%LOCALAPPDATA%\X\a.log; %USERPROFILE%\Desktop; пользователь <пользователь>; jdoe2') $p1
         $st = New-PbStep 3 'app' 'app:x' '<script>alert(1)</script> & Co' 'x'; $st.State = 'error'; $st.Detail = "$prof\a.txt"
         $h2 = New-PbReportHtml @($st) @{ Computer = 'PC-01'; Windows = 'Windows 11'; Started = (Get-Date); Finished = (Get-Date); Engine = 'dev'; Manual = @('Войти <в> почту'); LogDir = 'C:\ProgramData\tabula-rasa\logs' }
-        Check 'отчёт: HTML экранирован, личного нет' ($h2 -notmatch '<script>' -and $h2 -match '&lt;script&gt;' -and $h2 -match '&amp; Co' -and $h2 -match 'Войти &lt;в&gt; почту' -and
+        Check 'отчёт: HTML экранирован, личного нет' ($h2 -notmatch '<script>alert' -and $h2 -match '&lt;script&gt;' -and $h2 -match '&amp; Co' -and $h2 -match 'Войти &lt;в&gt; почту' -and
             $h2 -notmatch 'jdoe' -and $h2 -match '%USERPROFILE%\\a.txt' -and $h2 -match 'PC-01') ($h2.Length)
+        $sa = New-PbStep 2 'tweak' 'tweak:s' 'Тёмная тема' 's'; $sa.State = 'same'; $sa.Detail = 'уже было'
+        $sa.Actions = @([ordered]@{ Kind = 'Reg'; Target = 'HKCU:\X\A'; Old = '0'; New = '0'; Changed = $false })
+        $sb2 = New-PbStep 2 'tweak' 'tweak:p' 'Телеметрия' 'p'; $sb2.State = 'done'; $sb2.Detail = 'применено, изменено 1 из 2'
+        $sb2.Actions = @([ordered]@{ Kind = 'Reg'; Target = 'HKLM:\Y\B'; Old = 'нет'; New = '1'; Changed = $true }, [ordered]@{ Kind = 'Service'; Target = 'служба DiagTrack'; Old = 'отключена'; New = 'отключена'; Changed = $false })
+        $h3 = New-PbReportHtml @($sa, $sb2) @{ Computer = 'PC-01'; Windows = 'Windows 11'; Started = (Get-Date); Finished = (Get-Date); Engine = 'dev'; LogDir = 'C:\logs' }
+        $same = if ($h3 -match '(?s)Было настроено до прогона(.*?)</div>') { $Matches[1] } else { '' }
+        Check 'отчёт: «Было настроено до прогона», «Уже было: 1», раскрывающиеся «было → стало»' ($same -match 'Тёмная тема' -and $same -notmatch 'Телеметрия' -and $h3 -match 'Уже было: 1' -and
+            $h3 -match '<summary>изменено 1 из 2</summary>' -and $h3 -match 'нет → <b>1</b>' -and $h3 -match 'отключена <span class="muted">\(уже было\)' -and $h3 -match 'beforeprint') ($h3.Length)
     } finally { foreach ($k in $saveEnv.Keys) { Set-Item "env:$k" $saveEnv[$k] } }
     $plan2 = Get-PbRunPlan $sel $aps $tws $null
     $sync2 = [hashtable]::Synchronized(@{ StopAfter = $true })

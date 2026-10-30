@@ -43,6 +43,9 @@ Windows и файлов. Название в интерфейсе и текст�
 - **Без консоли**: обычный запуск — скрытый процесс (`setup.ps1 -Spawned`, `Start-PbSetupHidden`); шаги старта —
   `Set-PbSplash` (`lib/splash.ps1`, не зависит от остального lib), вопросы — `Show-UiMessage`, падение — `Show-PbFatal`.
   `Read-Host` и вывод для пользователя в консоль — только при `-Console`. Окно пользователя не закрывать и не прятать.
+- **«Уже было» и «изменено»**: `Set-Reg` / `Set-RegDefault` / `Set-SvcStart` / `Disable-Task` / `Remove-Appx` сначала
+  сравнивают; совпало — не трогать и не писать в журнал изменений. Каждое действие — `Add-PbAction` (было → стало);
+  по ним `Invoke-Tweak` пишет «уже было» / «применено» / «изменено N из M», программы — по `Get-PbWingetEntry` до и после.
 - **Отчёт** — `lib/report.ps1`, один механизм для окна, `-Console` и будущего клиентского отчёта; без личного, кроме
   имени компьютера (`Protect-PbReportText`), всё экранируется.
 - **Старые места** (`C:\pc-base`, `C:\pc-base-private`, `%LOCALAPPDATA%\pc-base`, `%ProgramData%\pc-base`) — в `$script:PbLegacy`.
