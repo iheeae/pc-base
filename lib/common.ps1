@@ -18,6 +18,7 @@ $script:PB = [ordered]@{
     CheckOnly            = $false     # режим проверки твиков: Set-Reg и др. сравнивают, а не пишут (Get-PbTweakStatus)
     RunSync              = $null      # прогон из окна: общий с окном Synchronized-хеш (lib\run.ps1); в консоли — $null
     Upgrades             = @()        # id программ, для которых выбрано обновление (статус «есть обновление»)
+    Reinstall            = @()        # id программ, выбранных для переустановки (Э7)
     Report               = $null      # отчёт о последнем прогоне (lib\report.ps1)
     Actions              = New-Object System.Collections.ArrayList   # действия прогона «было → стало» (Add-PbAction)
 }
@@ -368,7 +369,9 @@ function Get-PbWingetCodeInfo ($Code) {
 function Install-WingetApp ($App) {
     $verb = 'install'
     $pre = Get-PbWingetEntry $App.WingetId
-    if ($pre) {
+    $force = $script:PB.Reinstall -contains $App.Id
+    if ($pre -and $force) { $verb = 'reinstall' }
+    elseif ($pre) {
         # обновление — только если в окне выбрано «есть обновление»; иначе установленное не трогаем
         if ($script:PB.Upgrades -notcontains $App.Id) {
             Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' (Format-PbVersion $pre.Version)
@@ -377,13 +380,14 @@ function Install-WingetApp ($App) {
         }
         $verb = 'upgrade'
     }
-    $a = @($verb, '--id', $App.WingetId, '-e', '--source', 'winget',
+    $a = @($(if ($verb -eq 'reinstall') { 'install' } else { $verb }), '--id', $App.WingetId, '-e', '--source', 'winget',
            '--accept-package-agreements', '--accept-source-agreements')
+    if ($verb -eq 'reinstall') { $a += '--force' }
     if ($App.Interactive) { $a += '--interactive' } else { $a += @('--silent', '--disable-interactivity') }
     if ($App.Scope)    { $a += @('--scope', $App.Scope) }
     if ($App.Override) { $a += @('--override', $App.Override) }
     $limit = if ($App.TimeoutMin) { [double]$App.TimeoutMin } elseif ($App.Interactive) { 60 } else { 15 }
-    Write-Host "    $(if ($verb -eq 'upgrade') { 'обновление' } else { 'установка' }) $($App.Name) ($($App.WingetId)), не дольше $limit мин..." -ForegroundColor Gray
+    Write-Host "    $(switch ($verb) { 'upgrade' { 'обновление' } 'reinstall' { 'переустановка' } default { 'установка' } }) $($App.Name) ($($App.WingetId)), не дольше $limit мин..." -ForegroundColor Gray
     $r = Invoke-PbWingetTimed $a $limit $App.WingetId
     if ($r.Skipped) { Write-Skip "$($App.Name): пропущено вручную"; Add-Result $App.Name 'пропущено' 'пропущено вручную'; return }
     if ($r.TimedOut) {
@@ -398,7 +402,11 @@ function Install-WingetApp ($App) {
         if (-not $post) { $post = Get-PbWingetEntry $App.WingetId }
         $ver = if ($post) { $post.Version } else { '' }
         $noop = ($r.Code -eq -1978335135) -or ($r.Code -eq -1978335189)   # 0x8A150061 уже установлено, 0x8A15002B новее нет
-        if ($noop -or ($verb -eq 'upgrade' -and $pre.Version -and $ver -eq $pre.Version)) {
+        if ($verb -eq 'reinstall') {
+            $t = @((Format-PbVersion $ver), $i.Text) | Where-Object { $_ }
+            Write-Ok "$($App.Name): переустановлено"; Add-Result $App.Name 'переустановлено' ($t -join ', ')
+            Add-PbAction 'App' $App.Name $pre.Version $(if ($ver) { $ver } else { 'установлено' }) $true
+        } elseif ($noop -or ($verb -eq 'upgrade' -and $pre.Version -and $ver -eq $pre.Version)) {
             $t = @((Format-PbVersion $ver), $(if ($verb -eq 'upgrade') { 'новее нет' })) | Where-Object { $_ }
             Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' ($t -join ', ')
             Add-PbAction 'App' $App.Name $ver $ver $false
@@ -414,6 +422,25 @@ function Install-WingetApp ($App) {
     } else {
         Write-Fail "$($App.Name): $($i.Text)"; Add-Result $App.Name 'ОШИБКА' "$($i.Text); журнал winget: $($r.Log)"
     }
+}
+
+# удаление программы из winget (Э7): winget uninstall с ограничением времени; итог — «удалено» или «ОШИБКА».
+# Необратимо: в журнал изменений не попадает, в плане помечается
+function Uninstall-WingetApp ($App) {
+    if ($App.Source -ne 'winget' -or -not $App.WingetId) { Add-Result "Удалить: $($App.Name)" 'ОШИБКА' 'удаление доступно только для программ из winget'; return }
+    $pre = Get-PbWingetEntry $App.WingetId
+    if (-not $pre) { Write-Skip "$($App.Name): не установлена"; Add-Result "Удалить: $($App.Name)" 'уже было' 'не установлена'; return }
+    $a = @('uninstall', '--id', $App.WingetId, '-e', '--accept-source-agreements', '--disable-interactivity', '--silent')
+    Write-Host "    удаление $($App.Name) ($($App.WingetId)), не дольше 15 мин..." -ForegroundColor Gray
+    $r = Invoke-PbWingetTimed $a 15 "uninstall_$($App.WingetId)"
+    if ($r.Skipped) { Add-Result "Удалить: $($App.Name)" 'пропущено' 'пропущено вручную'; return }
+    if ($r.TimedOut) { Add-Result "Удалить: $($App.Name)" 'ТАЙМАУТ' "прервано через 15 мин; журнал winget: $($r.Log)"; return }
+    $i = Get-PbWingetCodeInfo $r.Code
+    if ($i.Reboot) { $script:PB.NeedReboot = $true }
+    if (-not (Get-PbWingetEntry $App.WingetId)) {
+        Write-Ok "$($App.Name): удалено"; Add-Result "Удалить: $($App.Name)" 'удалено' ((@((Format-PbVersion $pre.Version), $i.Text) | Where-Object { $_ }) -join ', ')
+        Add-PbAction 'App' $App.Name $(if ($pre.Version) { $pre.Version } else { 'установлено' }) 'нет' $true
+    } else { Write-Fail "$($App.Name): $($i.Text)"; Add-Result "Удалить: $($App.Name)" 'ОШИБКА' "программа осталась установленной; $($i.Text); журнал winget: $($r.Log)" }
 }
 
 # ---------- установка с официального сайта (Source = 'web') ----------
@@ -432,7 +459,7 @@ function Get-PbUninstallVersion ([string]$Like) {
 
 function Install-WebApp ($App) {
     $pre = Get-PbUninstallVersion $App.Detect
-    if ($pre) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' (Format-PbVersion $pre.Version); Add-PbAction 'App' $App.Name $pre.Version $pre.Version $false; return }
+    if ($pre -and $script:PB.Reinstall -notcontains $App.Id) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' (Format-PbVersion $pre.Version); Add-PbAction 'App' $App.Name $pre.Version $pre.Version $false; return }
     foreach ($u in $App.PageUrl, $App.BaseUrl) { if ($u -notmatch '^https://') { throw "адрес $u не HTTPS: загрузка без шифрования не выполняется" } }
     if (-not $App.Signer) { throw 'в каталоге не указан издатель (Signer): без проверки издателя файл с сайта не запускается' }
     Write-Host "    поиск актуальной версии на $($App.PageUrl)..." -ForegroundColor Gray

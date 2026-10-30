@@ -21,24 +21,33 @@ function New-PbStep ([int]$Phase, [string]$Kind, [string]$Key, [string]$Name, $R
         State = 'wait'; Detail = ''; Note = ''; Irreversible = $false; Already = $null; Actions = @() })
 }
 
-# $Sel — выбор окна (Apps, Configs, Tweaks, Files, FileTitles, Name, Upgrades); $Status — статусы окна (необязательно):
+# $Sel — выбор окна (Apps, Configs, Tweaks, Files, FileTitles, Name, Upgrades, Reinstall, Remove); $Status — статусы окна (необязательно):
 # @{ Apps = @{ id = @{ Kind } }; Tweaks = @{ id = 'applied' } } — для пометок «будет пропущено». Твики, статуса которых
 # нет (окно ещё не проверило, -Console), проверяются здесь же (Get-PbTweakStatus — только чтение)
 function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
     $plan = New-Object System.Collections.ArrayList
     $pre = @($Tweaks | Where-Object { $_.Phase -ne 'post' -and $Sel.Tweaks -contains $_.Id })
     $post = @($Tweaks | Where-Object { $_.Phase -eq 'post' -and $Sel.Tweaks -contains $_.Id })
-    $apps = @($Apps | Where-Object { $Sel.Apps -contains $_.Id })
+    # не $apps: имена переменных без учёта регистра — затёрло бы параметр $Apps (удаление и «с моими» без установки пропадали)
+    $inst = @($Apps | Where-Object { $Sel.Apps -contains $_.Id })
+    $remove = @($Apps | Where-Object { @($Sel.Remove) -contains $_.Id })
     $cfg = @($Apps | Where-Object { $_.Config -and $_.Config.Import -and $Sel.Configs -contains $_.Id })
-    $any = $pre.Count + $post.Count + $apps.Count + $cfg.Count + @($Sel.Files).Count + [int][bool]$Sel.Name
+    $any = $pre.Count + $post.Count + $inst.Count + $remove.Count + $cfg.Count + @($Sel.Files).Count + [int][bool]$Sel.Name
     if (-not $any) { return , $plan }
 
     [void]$plan.Add((New-PbStep 1 'restore' 'restore' 'Создать точку восстановления' $null))
     foreach ($t in $pre) { [void]$plan.Add((New-PbTweakStep 2 $t $Status)) }
-    foreach ($a in $apps) {
+    # удаление — первым в фазе программ: необратимо (вернуть — только установкой заново)
+    foreach ($a in $remove) {
+        $s = New-PbStep 3 'remove' "remove:$($a.Id)" "Удалить: $($a.Name)" $a.Id
+        $s.Irreversible = $true; $s.Note = 'необратимо: вернуть можно только установкой заново'
+        [void]$plan.Add($s)
+    }
+    foreach ($a in $inst) {
         $s = New-PbStep 3 'app' "app:$($a.Id)" $a.Name $a.Id
         $st = if ($Status -and $Status.Apps) { $Status.Apps[$a.Id] } else { $null }
-        if ($st -and $st.Kind -eq 'update' -and @($Sel.Upgrades) -contains $a.Id) { $s.Note = "обновление: $($st.Text -replace '^обновление: ', '')" }
+        if (@($Sel.Reinstall) -contains $a.Id) { $s.Note = 'переустановка'; $s.Name = "Переустановить: $($a.Name)" }
+        elseif ($st -and $st.Kind -eq 'update' -and @($Sel.Upgrades) -contains $a.Id) { $s.Note = "обновление: $($st.Text -replace '^обновление: ', '')" }
         elseif ($st -and $st.Kind -in 'installed', 'update') { $s.Note = 'уже установлено: будет пропущено' }
         elseif ($a.Source -eq 'web') { $s.Note = 'с официального сайта, с проверкой подписи' }
         if ($a.Interactive) { $s.Note = (@($s.Note, 'откроется мастер установки') | Where-Object { $_ }) -join '; ' }
@@ -132,6 +141,7 @@ function Get-PbStepState ($Results) {
 function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
     $script:PB.RunSync = $Sync
     $script:PB.Upgrades = @($Sel.Upgrades)
+    $script:PB.Reinstall = @($Sel.Reinstall)
     $byId = @{}; foreach ($a in $Apps) { $byId[$a.Id] = $a }
     $tw = @{}; foreach ($t in $Tweaks) { $tw[$t.Id] = $t }
     $wingetReady = $null
@@ -177,6 +187,11 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
                         }
                         Install-App $a
                         Update-SessionPath
+                    }
+                    'remove' {
+                        if ($null -eq $wingetReady) { $wingetReady = Initialize-Winget }
+                        if (-not $wingetReady) { Add-Result $s.Name 'ОШИБКА' 'нет winget'; break }
+                        Uninstall-WingetApp $byId[$s.Ref]
                     }
                     'config' {
                         $a = $byId[$s.Ref]

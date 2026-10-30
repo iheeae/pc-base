@@ -1,7 +1,9 @@
 ﻿// Tabula Rasa: модель окна выбора для WPF-привязок. Подключается из lib\gui.ps1 через Add-Type.
 // C# 5 (компилятор .NET Framework 4.8, что есть в Windows PowerShell 5.1): без =>, ?., $"" и т.п.
 // Правила выбора живут здесь, в сеттерах, чтобы их не обходила ни одна кнопка окна:
-//   снял программу — сбросился вариант «с моими настройками»; выбрал «с моими» — программа отметилась.
+//   снял программу — сбросился вариант «с моими настройками»; выбрал «с моими» — программа отметилась;
+//   установленная программа (IsLocked) отмечена и не снимается: с ней выполняется только выбранное действие
+//   (Action: обновить / переустановить / удалить) или «с моими настройками»; удаление и «с моими» несовместимы.
 
 using System;
 using System.Collections.Generic;
@@ -52,7 +54,16 @@ namespace PcBase
 
         // статус на этом компьютере (lib\status.ps1): installed / update / missing / unknown; для твиков — applied / partial / no
         private string _statusKind = "";
-        public string StatusKind { get { return _statusKind; } set { _statusKind = value ?? ""; Raise("StatusKind"); } }
+        public string StatusKind
+        {
+            get { return _statusKind; }
+            set
+            {
+                _statusKind = value ?? "";
+                if (_action == "update" && _statusKind != "update") { _action = ""; RaiseAction(); }
+                Raise("StatusKind"); Raise("CanUpdate");
+            }
+        }
         private string _statusText = "";
         public string StatusText { get { return _statusText; } set { _statusText = value ?? ""; Raise("StatusText"); Raise("HasStatus"); } }
         public bool HasStatus { get { return !string.IsNullOrEmpty(_statusText); } }
@@ -85,12 +96,75 @@ namespace PcBase
             get { return _checked; }
             set
             {
+                if (_locked && !value) return;   // установленную не снять
                 if (_checked == value) return;
                 _checked = value;
                 if (!value && _config) { _config = false; Raise("ConfigOn"); Raise("ConfigOff"); }
-                Raise("IsChecked");
+                Raise("IsChecked"); Raise("IsPicked");
             }
         }
+
+        // установлена на этом компьютере (статус installed / update): отмечена, серая, не снимается
+        private bool _locked;
+        public bool IsLocked
+        {
+            get { return _locked; }
+            set
+            {
+                if (_locked == value) return;
+                _locked = value;
+                if (value) { _checked = true; Raise("IsChecked"); }
+                else { _checked = false; _config = false; _action = ""; Raise("IsChecked"); Raise("ConfigOn"); Raise("ConfigOff"); RaiseAction(); }
+                Raise("IsLocked"); Raise("CanToggle"); Raise("IsPicked"); Raise("ConfigLabel"); Raise("ConfigOffText");
+            }
+        }
+        public bool CanToggle { get { return !_locked; } }
+        public bool CanUpdate { get { return _locked && _statusKind == "update"; } }
+        public bool CanRemove { get; set; }        // удаление — только для программ из winget
+
+        // действие над установленной: "" (оставить), update, reinstall, remove
+        private string _action = "";
+        public string Action
+        {
+            get { return _action; }
+            set
+            {
+                value = value ?? "";
+                if (!_locked) value = "";
+                if (value == "update" && _statusKind != "update") value = "";
+                if (value == "remove" && !CanRemove) value = "";
+                if (_action == value) return;
+                _action = value;
+                if (value == "remove" && _config) { _config = false; Raise("ConfigOn"); Raise("ConfigOff"); }
+                RaiseAction();
+            }
+        }
+        void RaiseAction() { Raise("Action"); Raise("ActKeep"); Raise("ActUpdate"); Raise("ActReinstall"); Raise("ActRemove"); Raise("ActionText"); Raise("HasAction"); Raise("IsPicked"); }
+        public bool ActKeep { get { return _action == ""; } set { if (value) Action = ""; } }
+        public bool ActUpdate { get { return _action == "update"; } set { if (value) Action = "update"; } }
+        public bool ActReinstall { get { return _action == "reinstall"; } set { if (value) Action = "reinstall"; } }
+        public bool ActRemove { get { return _action == "remove"; } set { if (value) Action = "remove"; } }
+        public bool HasAction { get { return _action != ""; } }
+        public string ActionText
+        {
+            get
+            {
+                switch (_action)
+                {
+                    case "update": return "будет обновлена";
+                    case "reinstall": return "переустановка";
+                    case "remove": return "будет удалена";
+                    default: return "";
+                }
+            }
+        }
+
+        // войдёт в прогон: отмеченная неустановленная или установленная с действием либо «с моими настройками»
+        public bool IsPicked { get { return _checked && (!_locked || _action != "" || _config); } }
+
+        // блок «Установка» в подробностях: у установленной — «Настройки: не менять / с моими настройками»
+        public string ConfigLabel { get { return _locked ? "Настройки" : "Установка"; } }
+        public string ConfigOffText { get { return _locked ? "Не менять" : "Чистая"; } }
 
         private bool _config;
         public bool ConfigOn
@@ -101,7 +175,8 @@ namespace PcBase
                 if (!HasConfig || !_cfgAvail) value = false;
                 if (_config == value) return;
                 _config = value;
-                Raise("ConfigOn"); Raise("ConfigOff");
+                if (value && _action == "remove") { _action = ""; RaiseAction(); }
+                Raise("ConfigOn"); Raise("ConfigOff"); Raise("IsPicked");
                 if (value) IsChecked = true;
             }
         }

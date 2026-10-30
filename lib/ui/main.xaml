@@ -304,16 +304,38 @@
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
                                 </Border>
                             </WrapPanel>
-                            <CheckBox Content="Отмечено" IsChecked="{Binding IsChecked, Mode=TwoWay}" Margin="0,12,0,0"/>
+                            <CheckBox Content="Отмечено" IsChecked="{Binding IsChecked, Mode=TwoWay}" IsEnabled="{Binding CanToggle}" Margin="0,12,0,0"/>
                             <TextBlock Text="{Binding FullDesc}" TextWrapping="Wrap" LineHeight="20" Margin="0,8,0,0"/>
 
-                            <!-- установка: сегмент «Чистая | С моими настройками» -->
-                            <StackPanel x:Name="Install" Margin="0,24,0,0" Visibility="{Binding HasConfig, Converter={StaticResource Vis}}">
-                                <TextBlock Text="Установка" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                            <!-- установленная программа (Э7): что с ней сделать при применении -->
+                            <StackPanel Margin="0,24,0,0" Visibility="{Binding IsLocked, Converter={StaticResource Vis}}">
+                                <TextBlock Text="Программа установлена" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
                                 <Border Height="32" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
                                         Background="{DynamicResource Control}" HorizontalAlignment="Left">
                                     <StackPanel Orientation="Horizontal">
-                                        <RadioButton GroupName="Install" Style="{StaticResource Segment}" Content="Чистая" Height="30" Padding="12,0"
+                                        <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Оставить" Height="30" Padding="12,0"
+                                                     IsChecked="{Binding ActKeep, Mode=TwoWay}" ToolTip="Не трогать установленную программу"/>
+                                        <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Обновить" Height="30" Padding="12,0"
+                                                     IsChecked="{Binding ActUpdate, Mode=TwoWay}" IsEnabled="{Binding CanUpdate}"
+                                                     ToolTip="Обновить до последней версии через winget" ToolTipService.ShowOnDisabled="True"/>
+                                        <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Переустановить" Height="30" Padding="12,0"
+                                                     IsChecked="{Binding ActReinstall, Mode=TwoWay}" ToolTip="Установить заново поверх установленной"/>
+                                        <RadioButton GroupName="Act" Style="{StaticResource Segment}" Content="Удалить" Height="30" Padding="12,0"
+                                                     IsChecked="{Binding ActRemove, Mode=TwoWay}" IsEnabled="{Binding CanRemove}"
+                                                     ToolTip="Удалить программу через winget. Вернуть её можно только установкой заново" ToolTipService.ShowOnDisabled="True"/>
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" LineHeight="18" Margin="0,8,0,0"
+                                           Text="Отметка установленной программы не снимается. Чтобы применить к ней сохранённые настройки, выберите «С моими настройками» ниже."/>
+                            </StackPanel>
+
+                            <!-- установка: сегмент «Чистая | С моими настройками» -->
+                            <StackPanel x:Name="Install" Margin="0,24,0,0" Visibility="{Binding HasConfig, Converter={StaticResource Vis}}">
+                                <TextBlock Text="{Binding ConfigLabel}" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                <Border Height="32" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlBorder}"
+                                        Background="{DynamicResource Control}" HorizontalAlignment="Left">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton GroupName="Install" Style="{StaticResource Segment}" Content="{Binding ConfigOffText}" Height="30" Padding="12,0"
                                                      IsChecked="{Binding ConfigOff, Mode=TwoWay}" ToolTip="Как после обычной установки, без переноса настроек"/>
                                         <RadioButton x:Name="RbMine" GroupName="Install" Style="{StaticResource Segment}" Content="С моими настройками" Height="30" Padding="12,0"
                                                      IsChecked="{Binding ConfigOn, Mode=TwoWay}" IsEnabled="{Binding ConfigAvailable}"/>
