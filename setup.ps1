@@ -1,18 +1,18 @@
-﻿# pc-base: развёртывание и обслуживание ПК. Профилей нет — одно окно со всем каталогом.
+﻿# Tabula Rasa: развёртывание и обслуживание компьютеров. Профилей нет — одно окно со всем каталогом.
 #
-# Запуск (сам поднимет права админа):
-#   powershell -ExecutionPolicy Bypass -File C:\pc-base\setup.ps1
-# Обычно его запускает bootstrap.ps1, руками — для повторного прогона.
+# Запуск (права администратора запрашиваются автоматически):
+#   powershell -ExecutionPolicy Bypass -File C:\tabula-rasa\setup.ps1
+# Обычно запускается из bootstrap.ps1; вручную — для повторного прогона.
 #
-# Две папки: движок — здесь (C:\pc-base, клон публичной репы), Мои данные — C:\pc-base-private
-# (клон своей приватной репы: сохранения, настройки программ). Подключаются из окна; без них работает всё,
+# Две папки: движок — здесь (C:\tabula-rasa, клон публичного репозитория), Мои данные — C:\tabula-rasa-private
+# (клон своего приватного репозитория: сохранения, настройки программ). Подключаются из окна; без них работает всё,
 # кроме «с моими настройками», а сохранения пишутся локально.
 #
 # Ключи:
 #   -Selection <имя|путь>   открыть окно с сохранением: путь к .json, имя из Моих данных или локальных сохранений
 #   -NoPull                 не подтягивать свежую версию из git
 #   -DryRun                 открыть окно в режиме «только показать план» (он и так по умолчанию)
-#   -DataRoot <папка>       где лежат свои данные, если не в C:\pc-base-private
+#   -DataRoot <папка>       где лежат свои данные, если не в C:\tabula-rasa-private
 
 [CmdletBinding()]
 param(
@@ -41,18 +41,64 @@ if (-not $isAdmin -or -not $isSta) {
     return
 }
 
-$Host.UI.RawUI.WindowTitle = 'pc-base'
+$Host.UI.RawUI.WindowTitle = 'Tabula Rasa'
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 . (Join-Path $PSScriptRoot 'lib\gui.ps1')
 . (Join-Path $PSScriptRoot 'lib\configs.ps1')
 $script:PB.Root = $PSScriptRoot
 if ($DataRoot) { $script:PB.DataRoot = $DataRoot }
+$EngineRepo = 'iheeae/tabula-rasa'
+$startNotices = @()
+
+# загрузчик в отдельном окне: переносит или заново клонирует папку движка. Сами выходим сразу, чтобы не держать её
+function Start-PbBootstrap {
+    $boot = "[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/$EngineRepo/master/bootstrap.ps1 | iex"
+    Start-Process powershell.exe -WorkingDirectory $env:SystemRoot -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $boot)
+    Set-Location $env:SystemRoot
+}
+
+# ---------- переезд pc-base → Tabula Rasa ----------
+# Запуск из старой C:\pc-base: свою папку не переместить, поэтому переносит загрузчик. Новая уже есть — запускается она.
+# С -NoPull (так запускает загрузчик) не переезжаем: загрузчик уже пробовал, папка занята — работаем из старой.
+$newRoot = 'C:\tabula-rasa'
+if ($PSScriptRoot -eq $script:PbLegacy.Root -and -not $NoPull) {
+    if (Test-Path (Join-Path $newRoot 'setup.ps1')) {
+        Write-Host "  Tabula Rasa установлен в $newRoot, запуск оттуда." -ForegroundColor Yellow
+        $fwd = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', "`"$newRoot\setup.ps1`"")
+        if ($Selection) { $fwd += @('-Selection', "`"$Selection`"") }
+        if ($DataRoot) { $fwd += @('-DataRoot', "`"$DataRoot`"") }
+        Start-Process powershell.exe -WorkingDirectory $env:SystemRoot -ArgumentList $fwd
+    } else {
+        Write-Host "  pc-base теперь называется Tabula Rasa. Загрузчик перенесёт $PSScriptRoot в $newRoot." -ForegroundColor Yellow
+        Start-PbBootstrap
+    }
+    return
+}
+if ($PSScriptRoot -eq $script:PbLegacy.Root) {
+    $startNotices += "Tabula Rasa запущен из старой папки $($PSScriptRoot): её не удалось переименовать. Закройте окна, которые её используют, и запустите Tabula Rasa снова."
+}
+if (Get-Command git -ErrorAction SilentlyContinue) { Update-PbOrigin $PSScriptRoot }
+if ($PSScriptRoot -ne $script:PbLegacy.Root -and (Test-Path $script:PbLegacy.Root)) {
+    $startNotices += "Найдена старая папка $($script:PbLegacy.Root). Если всё работает, её можно удалить."
+}
+# Мои данные, локальные сохранения, журналы и логи
+if (-not $DataRoot) {
+    switch (Move-PbLegacyDir $script:PbLegacy.DataRoot $script:PB.DataRoot) {
+        'both' { $startNotices += "Найдена старая папка $($script:PbLegacy.DataRoot). Мои данные уже в $($script:PB.DataRoot), старую папку можно удалить." }
+        'busy' { $script:PB.DataRoot = $script:PbLegacy.DataRoot
+                 $startNotices += "Папку $($script:PbLegacy.DataRoot) не удалось переименовать: она используется. Мои данные открыты из неё; перезапустите Tabula Rasa, когда папка освободится." }
+    }
+}
+if (Get-Command git -ErrorAction SilentlyContinue) { Update-PbOrigin $script:PB.DataRoot }
+[void](Move-PbLegacyDir $script:PbLegacy.Local (Join-Path $env:LOCALAPPDATA 'tabula-rasa') 10)
+switch (Move-PbLegacyDir $script:PbLegacy.Program (Join-Path $env:ProgramData 'tabula-rasa') 10) {
+    'busy' { $script:PB.LogDir = Join-Path $script:PbLegacy.Program 'logs' }
+}
 
 # ---------- старый клон ----------
-# Публичная репа начата с чистой истории. Если эта папка — клон чего-то другого (не тот origin или нет общего
-# предка с origin/master), git pull не поможет: передаём дело загрузчику — он отодвинет папку в .old_<дата>
-# (ничего не удаляя) и склонирует движок заново. Сами выходим сразу, чтобы не держать папку.
-$EngineRepo = 'iheeae/pc-base'
+# Публичный репозиторий начат с чистой истории. Если эта папка — клон чего-то другого (не тот origin или нет общего
+# предка с origin/master), git pull не поможет: загрузчик отодвинет папку в .old_<дата> (ничего не удаляя)
+# и склонирует движок заново.
 if (-not $NoPull -and (Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $PSScriptRoot '.git'))) {
     $origin = & git -C $PSScriptRoot remote get-url origin 2>$null
     $sameOrigin = $origin -match ('github\.com[/:]' + [regex]::Escape($EngineRepo) + '(\.git)?/?$')
@@ -66,11 +112,9 @@ if (-not $NoPull -and (Get-Command git -ErrorAction SilentlyContinue) -and (Test
     }
     if (-not $sameOrigin -or -not $related) {
         Write-Host ''
-        Write-Host "  $PSScriptRoot — клон старой версии pc-base ($origin)." -ForegroundColor Yellow
-        Write-Host '  Запускаю загрузчик: он отодвинет эту папку в .old_<дата> и поставит движок заново.' -ForegroundColor Yellow
-        $boot = "[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm https://raw.githubusercontent.com/$EngineRepo/master/bootstrap.ps1 | iex"
-        Start-Process powershell.exe -WorkingDirectory $env:SystemRoot -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $boot)
-        Set-Location $env:SystemRoot
+        Write-Host "  $PSScriptRoot содержит устаревшую копию ($origin)." -ForegroundColor Yellow
+        Write-Host '  Загрузчик переместит её в .old_<дата> и установит Tabula Rasa заново.' -ForegroundColor Yellow
+        Start-PbBootstrap
         return
     }
 }
@@ -84,15 +128,15 @@ try {
     if (-not $NoPull -and (Get-Command git -ErrorAction SilentlyContinue)) {
         $top = & git -C $PSScriptRoot rev-parse --show-toplevel 2>$null
         if ($LASTEXITCODE -eq 0 -and $top) {
-            Write-Step 'Подтягиваю свежую версию движка'
+            Write-Step 'Обновление Tabula Rasa'
             & git -C $top pull --ff-only
-            if ($LASTEXITCODE -ne 0) { Write-Warn2 'git pull не прошёл — работаю с тем, что есть' }
+            if ($LASTEXITCODE -ne 0) { Write-Warn2 'git pull не выполнен, используется текущая версия' }
         }
     }
     # Мои данные: подтянуть с GitHub и отправить то, что не ушло в прошлый раз
     if (-not $NoPull -and (Test-PbDataConnected)) {
-        Write-Step "Мои данные ($($script:PB.DataRoot)): обмен с GitHub"
-        if (-not (Push-PbData)) { Write-Warn2 "нет связи — неотправленное ($((Get-PbDataState).Pending)) уйдёт в следующий раз" }
+        Write-Step "Мои данные ($($script:PB.DataRoot)): синхронизация с GitHub"
+        if (-not (Push-PbData)) { Write-Warn2 "нет связи с GitHub; неотправленные изменения ($((Get-PbDataState).Pending)) будут отправлены при следующем запуске" }
     }
 
     # ---------- каталог ----------
@@ -106,16 +150,16 @@ try {
 
     Clear-Host
     Write-Host ''
-    Write-Host '  pc-base' -ForegroundColor Cyan
+    Write-Host '  Tabula Rasa' -ForegroundColor Cyan
     Write-Host ("  {0} | Windows {1} (сборка {2}) | {3}{4}" -f $env:COMPUTERNAME, $script:PB.Os, [Environment]::OSVersion.Version.Build,
         $(if ($script:PB.IsDomain) { 'в домене' } else { 'не в домене' }), $(if ($script:PB.IsLaptop) { ' | ноутбук' } else { '' })) -ForegroundColor Gray
     $ds = Get-PbDataState
     if ($ds.Connected) { Write-Host "  Мои данные: $($script:PB.DataRoot)$(if ($ds.User) { " ($($ds.User))" })$(if ($ds.Pending) { ", не отправлено: $($ds.Pending)" })" -ForegroundColor Gray }
-    else { Write-Host '  Мои данные не подключены — подключаются в окне, слева внизу' -ForegroundColor Gray }
+    else { Write-Host '  Мои данные не подключены (подключение — в окне, слева внизу)' -ForegroundColor Gray }
     if ($DryRun) { Write-Host '  РЕЖИМ ПРОВЕРКИ: ничего не меняется' -ForegroundColor Yellow }
     if (-not (Test-SameUserAsDesktop)) {
         Write-Warn2 "Скрипт запущен от $env:USERNAME, а рабочий стол принадлежит другому пользователю."
-        Write-Warn2 'Настройки HKCU (проводник, панель задач, Terminal) уедут в профиль администратора.'
+        Write-Warn2 'Настройки HKCU (Проводник, панель задач, Terminal) будут применены к профилю администратора.'
         if ((Read-Host '    Продолжить? [y/N]') -notmatch '^[yYнН]') { return }
     }
 
@@ -128,7 +172,7 @@ try {
     # файлы pc-base-exe показываем в окне, только если Диск уже виден; иначе — выбор во время прогона
     $driveDir = Find-InstallersDir
     $driveItems = if ($driveDir) { @(Get-DriveItems $driveDir) } else { $null }
-    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -DriveItems $driveItems -Initial $initial -DryRun $true -IsDomain $script:PB.IsDomain
+    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -DriveItems $driveItems -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain
     if (-not $sel) { Write-Host '  Отменено.'; return }
     $DryRun = $sel.DryRun
     $newName = $sel.Name
@@ -144,11 +188,11 @@ try {
         $selApps | ForEach-Object { Write-Host "    программа: $($_.Name) [$($_.Source)]" }
         $selCfg | ForEach-Object { Write-Host "    настройки: $($_.Name) — $($_.ConfigName)" }
         $sel.Files | ForEach-Object { Write-Host "    с Диска:   $_" }
-        if ($sel.FilesAsk -and -not $sel.Files.Count) { Write-Host '    с Диска:   выбрать при прогоне' }
+        if ($sel.FilesAsk -and -not $sel.Files.Count) { Write-Host '    с Диска:   выбор во время прогона' }
         $postTw | ForEach-Object { Write-Host "    после:     $($_.Name)" }
-        if ($newName) { Write-Host "    имя ПК:    $newName" }
+        if ($newName) { Write-Host "    имя:       $newName" }
         Write-Host ''
-        Write-Host '  Это был только план. Для боевого прогона выбери внизу окна режим «Применить».' -ForegroundColor Yellow
+        Write-Host '  Показан только план, изменения не вносились. Чтобы применить их, выберите внизу окна режим «Применить».' -ForegroundColor Yellow
         return
     }
 
@@ -157,9 +201,9 @@ try {
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
         Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' 'SystemRestorePointCreationFrequency' 0
-        Checkpoint-Computer -Description "pc-base $($script:PB.Stamp)" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        Checkpoint-Computer -Description "tabula-rasa $($script:PB.Stamp)" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
         Write-Ok 'создана'
-    } catch { Write-Warn2 "не создалась: $($_.Exception.Message)" }
+    } catch { Write-Warn2 "не создана: $($_.Exception.Message)" }
 
     # ---------- 2. настройки ----------
     if ($preTw) { Write-Step 'Настройки Windows'; foreach ($t in $preTw) { Invoke-Tweak $t } }
@@ -167,7 +211,7 @@ try {
     # ---------- 3. программы ----------
     if ($selApps) {
         Write-Step 'Программы'
-        if (-not (Initialize-Winget)) { Write-Fail 'Без winget программы из каталога не поставить' }
+        if (-not (Initialize-Winget)) { Write-Fail 'Без winget программы из каталога установить невозможно' }
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             & winget source update --name winget 2>$null | Out-Null
         }
@@ -203,16 +247,16 @@ try {
     }
 
     if ($script:PB.DriveInstalledNow) {
-        if ((Read-Host '  Google Drive ставился только ради pc-base-exe. Снести его с этого ПК? [y/N]') -match '^[yYнН]') {
+        if ((Read-Host '  Google Drive устанавливался только для pc-base-exe. Удалить его с этого компьютера? [y/N]') -match '^[yYнН]') {
             & winget uninstall --id Google.GoogleDrive -e --silent --disable-interactivity
-            Write-Ok 'Google Drive снесён'
+            Write-Ok 'Google Drive удалён'
         }
     }
 
     # ---------- 5. имя ПК ----------
     if ($newName -and $newName -ne $env:COMPUTERNAME) {
-        try { Rename-Computer -NewName $newName -Force -ErrorAction Stop; $script:PB.NeedReboot = $true; Add-Result "Имя ПК → $newName" 'применено' }
-        catch { Add-Result "Имя ПК → $newName" 'ОШИБКА' $_.Exception.Message }
+        try { Rename-Computer -NewName $newName -Force -ErrorAction Stop; $script:PB.NeedReboot = $true; Add-Result "Имя компьютера → $newName" 'применено' }
+        catch { Add-Result "Имя компьютера → $newName" 'ОШИБКА' $_.Exception.Message }
     }
 
     if ($script:PB.NeedExplorerRestart) { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue }
@@ -225,16 +269,16 @@ finally {
         Write-Step 'Итог'
         $script:PB.Results | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
         $fails = @($script:PB.Results | Where-Object { $_.'Статус' -eq 'ОШИБКА' })
-        if ($fails.Count) { Write-Host "  Ошибок: $($fails.Count) — подробности в логе" -ForegroundColor Red }
+        if ($fails.Count) { Write-Host "  Ошибок: $($fails.Count). Подробности — в журнале выполнения" -ForegroundColor Red }
         else { Write-Host '  Ошибок нет' -ForegroundColor Green }
     }
     if ($script:PB.Manual.Count) {
-        Write-Step 'Доделать руками'
+        Write-Step 'Выполнить вручную'
         $i = 1; foreach ($m in $script:PB.Manual) { Write-Host ("  {0,2}. {1}" -f $i, $m); $i++ }
         $script:PB.Manual | Set-Content -Path (Join-Path $script:PB.LogDir "manual_$($script:PB.Stamp).txt") -Encoding UTF8
     }
     if ($changesFile) { Write-Host ''; Write-Host "  Журнал изменений: $changesFile  (откат: undo.ps1)" -ForegroundColor Gray }
-    Write-Host "  Лог: $transcript" -ForegroundColor Gray
+    Write-Host "  Журнал выполнения: $transcript" -ForegroundColor Gray
     Stop-Transcript | Out-Null
 
     if ($script:PB.NeedReboot) {

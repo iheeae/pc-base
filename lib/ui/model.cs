@@ -1,4 +1,4 @@
-﻿// pc-base: модель окна выбора для WPF-привязок. Подключается из lib\gui.ps1 через Add-Type.
+﻿// Tabula Rasa: модель окна выбора для WPF-привязок. Подключается из lib\gui.ps1 через Add-Type.
 // C# 5 (компилятор .NET Framework 4.8, что есть в Windows PowerShell 5.1): без =>, ?., $"" и т.п.
 // Правила выбора живут здесь, в сеттерах, чтобы их не обходила ни одна кнопка окна:
 //   снял программу — сбросился вариант «с моими настройками»; выбрал «с моими» — программа отметилась.
@@ -46,6 +46,7 @@ namespace PcBase
         public bool Interactive { get; set; }
         public bool Irreversible { get; set; }
         public bool IsWeb { get; set; }
+        public bool OpenSource { get; set; }      // бейдж «Open source»
         public bool HasConfig { get; set; }
         // файл настроек нашёлся (в своих данных или в движке); нет — «с моими» не включается
         private bool _cfgAvail = true;

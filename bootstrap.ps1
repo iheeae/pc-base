@@ -1,27 +1,28 @@
-# pc-base bootstrap -- public loader. No secrets, no personal data.
+# Tabula Rasa bootstrap -- public loader. No secrets, no personal data.
 # ASCII only on purpose: it is fetched with irm and run with iex in Windows PowerShell 5.1.
 #
 # On a clean Windows, open PowerShell AS ADMINISTRATOR and run:
-#   irm iheeae.github.io/pc-base | iex
+#   irm iheeae.github.io/tabula-rasa | iex
 # Old Windows 10 without TLS 1.2 by default:
-#   [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm iheeae.github.io/pc-base | iex
+#   [Net.ServicePointManager]::SecurityProtocol='Tls12'; irm iheeae.github.io/tabula-rasa | iex
 # Same file straight from the repo:
-#   irm https://raw.githubusercontent.com/iheeae/pc-base/master/bootstrap.ps1 | iex
+#   irm https://raw.githubusercontent.com/iheeae/tabula-rasa/master/bootstrap.ps1 | iex
 #
 # What it does (no GitHub login needed):
 #   1. makes sure winget works
 #   2. installs Git
-#   3. clones the public repo iheeae/pc-base into C:\pc-base; an old copy there (another origin,
-#      or no common history with origin/master) is moved to C:\pc-base.old_<date>, nothing is deleted
-#   4. starts C:\pc-base\setup.ps1 (selection window)
+#   3. moves C:\pc-base (the old name) to C:\tabula-rasa if needed, then clones or updates the public repo
+#      iheeae/tabula-rasa there; an unrelated copy (another origin, or no common history with origin/master)
+#      is moved to C:\tabula-rasa.old_<date>, nothing is deleted
+#   4. starts C:\tabula-rasa\setup.ps1 (selection window)
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$Repo   = 'iheeae/pc-base'
+$Repo   = 'iheeae/tabula-rasa'
 $Branch = 'master'
-$Dest   = 'C:\pc-base'
+$Dest   = 'C:\tabula-rasa'
 
 function Say ($t, $c = 'Cyan') { Write-Host "==> $t" -ForegroundColor $c }
 function Refresh-Path {
@@ -75,7 +76,35 @@ git config --global core.quotepath false
 git config --global --add safe.directory ($Dest -replace '\\', '/')
 
 # ---------- 3. clone ----------
-# The public repo started with a clean history: an old C:\pc-base (another origin, or the same URL
+# Move a folder, waiting up to 60 s if something holds it (Explorer, a terminal). Returns $true if moved.
+function Move-Busy ([string]$From, [string]$To) {
+    Set-Location $env:SystemRoot
+    for ($i = 0; $i -lt 30; $i++) {
+        try { Move-Item $From $To -ErrorAction Stop; return $true }
+        catch {
+            if ($i -eq 0) { Say "$From is in use (Explorer, a terminal, an old window?), waiting up to 60 s" 'Yellow' }
+            Start-Sleep -Seconds 2
+        }
+    }
+    return $false
+}
+
+# pc-base was renamed to Tabula Rasa: C:\pc-base moves to C:\tabula-rasa and its origin gets the new URL.
+# Folder busy -> keep working from the old one this time; setup.ps1 shows a notice to restart later.
+$Legacy = 'C:\pc-base'
+if ((Test-Path $Legacy) -and -not (Test-Path $Dest)) {
+    Say "pc-base is now Tabula Rasa: moving $Legacy to $Dest"
+    if (-not (Move-Busy $Legacy $Dest)) {
+        Say "Could not move $Legacy. Working from it this time; close the windows that use it and run again." 'Yellow'
+        $Dest = $Legacy
+    }
+    if (Test-Path (Join-Path $Dest '.git')) {
+        $u = git -C $Dest remote get-url origin 2>$null
+        if ($u -match '/pc-base(\.git)?/?$') { git -C $Dest remote set-url origin "https://github.com/$Repo.git" }
+    }
+}
+
+# The public repo started with a clean history: an old copy (another origin, or the same URL
 # without a common ancestor with origin/master) cannot be pulled. Move it aside, never delete.
 function Test-OurClone ([string]$Dir) {
     if (-not (Test-Path (Join-Path $Dir '.git'))) { return $false }
@@ -88,17 +117,9 @@ function Test-OurClone ([string]$Dir) {
 }
 if ((Test-Path $Dest) -and -not (Test-OurClone $Dest)) {
     $old = "$Dest.old_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-    Say "$Dest is an old copy of pc-base or something else -- moving it to $old" 'Yellow'
-    Set-Location $env:SystemRoot
-    $moved = $false
-    for ($i = 0; $i -lt 30 -and -not $moved; $i++) {
-        try { Move-Item $Dest $old -ErrorAction Stop; $moved = $true }
-        catch {
-            if ($i -eq 0) { Say 'The folder is busy (an old pc-base window?), waiting up to 60 s' 'Yellow' }
-            Start-Sleep -Seconds 2
-        }
-    }
-    if (-not $moved) { Say "Could not move $Dest. Close windows and editors that use it and run again." 'Red'; return }
+    Say "$Dest holds an outdated or unrelated copy -- moving it to $old" 'Yellow'
+    if (-not (Move-Busy $Dest $old)) { Say "Could not move $Dest. Close the windows that use it and run again." 'Red'; return }
+    if ($Dest -eq $Legacy) { $Dest = 'C:\tabula-rasa' }   # a fresh clone goes to the new place
 }
 if (Test-Path (Join-Path $Dest '.git')) {
     Say "Updating $Dest"

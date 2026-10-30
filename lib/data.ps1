@@ -1,17 +1,17 @@
-﻿# pc-base: сохранения галочек и «Мои данные».
+﻿# Tabula Rasa: сохранения галочек и «Мои данные».
 #
-# «Мои данные» — клон своей приватной репы <логин>/pc-base-private в $script:PB.DataRoot (C:\pc-base-private).
+# «Мои данные» — клон своего приватного репозитория <логин>/tabula-rasa-private в $script:PB.DataRoot (C:\tabula-rasa-private).
 # Подключены (есть DataRoot\.git) — сохранения лежат в DataRoot\saves и каждое изменение коммитится и отправляется;
 # нет сети — коммит остаётся локальным, отправится при следующем запуске. Не подключены — сохранения лежат
-# в %LOCALAPPDATA%\pc-base\saves, после подключения их можно перенести.
+# в %LOCALAPPDATA%\tabula-rasa\saves, после подключения их можно перенести.
 #
 # Сохранение — только галочки: Apps, Tweaks, Configs (у кого выбрано «с моими настройками»), Files, FilesAsk
 # плюс Name, Created, Machine, Version. Настройки программ живут отдельно, в DataRoot\configs.
 
 $script:PbSaveVersion = 1
-$script:PbDataRepoName = 'pc-base-private'
+$script:PbDataRepoName = 'tabula-rasa-private'
 
-function Get-PbLocalSaveDir { Join-Path $env:LOCALAPPDATA 'pc-base\saves' }
+function Get-PbLocalSaveDir { Join-Path $env:LOCALAPPDATA 'tabula-rasa\saves' }
 function Test-PbDataConnected { Test-Path (Join-Path $script:PB.DataRoot '.git') }
 function Get-PbSaveDir {
     if (Test-PbDataConnected) { return (Join-Path $script:PB.DataRoot 'saves') }
@@ -184,29 +184,29 @@ function Update-PbPath {
 }
 
 # Подключить Мои данные. Идёт в фоне; о ходе пишет в $Sync: Step (текст), Code и Url (вход в GitHub), Error.
-# Шаги: gh (поставить через winget) → вход в браузере → <логин>/pc-base-private (создать приватной, если нет) →
+# Шаги: gh (поставить через winget) → вход в браузере → <логин>/tabula-rasa-private (создать приватной, если нет) →
 # клон в DataRoot (или pull, если уже есть) → имя и noreply-почта для коммитов.
 function Connect-PbData ($Sync) {
     function Step ([string]$T) { $Sync.Step = $T }
     Update-PbPath
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Нет git: запусти pc-base загрузчиком, он его поставит' }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git не установлен. Запустите Tabula Rasa через загрузчик: он устанавливает Git.' }
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        Step 'Ставлю GitHub CLI…'
+        Step 'Установка GitHub CLI…'
         & winget install --id GitHub.cli -e --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Null
         Update-PbPath
-        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GitHub CLI не поставился (winget)' }
+        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Не удалось установить GitHub CLI через winget.' }
     }
 
-    Step 'Проверяю вход в GitHub…'
+    Step 'Проверка входа в GitHub…'
     $auth = @(& gh auth status --hostname github.com 2>&1 | ForEach-Object { "$_" })
     if ($LASTEXITCODE -ne 0 -and ($auth -join "`n") -match 'Failed to log in') {
         # учётка есть, но проверить не вышло: нет сети или токен отозван — новый вход тут не поможет
         $why = @(& gh api user 2>&1 | ForEach-Object { "$_" }) -join ' '
         if ($why -match 'dial tcp|timeout|no such host|connection|socket') { throw "Нет связи с GitHub: $why" }
-        throw "Сохранённый вход в GitHub недействителен. Выйди (gh auth logout) и подключись снова. $why"
+        throw "Сохранённый вход в GitHub недействителен. Выполните gh auth logout и подключитесь снова. $why"
     }
     if ($LASTEXITCODE -ne 0) {
-        Step 'Жду входа в GitHub в браузере…'
+        Step 'Ожидание входа в GitHub в браузере…'
         $psi = New-Object Diagnostics.ProcessStartInfo 'gh', 'auth login --hostname github.com --git-protocol https --web --skip-ssh-key'
         $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
         $psi.RedirectStandardError = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardInput = $true
@@ -227,25 +227,25 @@ function Connect-PbData ($Sync) {
 
     $login = (& gh api user --jq .login 2>$null | Select-Object -First 1)
     $id = (& gh api user --jq .id 2>$null | Select-Object -First 1)
-    if (-not $login) { throw 'Не узнать логин GitHub (gh api user)' }
+    if (-not $login) { throw 'Не удалось получить имя пользователя GitHub (gh api user).' }
     $repo = "$login/$($script:PbDataRepoName)"
 
     if (Test-Path (Join-Path $script:PB.DataRoot '.git')) {
-        Step "Обновляю $($script:PB.DataRoot)…"
+        Step "Обновление $($script:PB.DataRoot)…"
         [void](Invoke-PbGit pull -q --rebase)
     } else {
         if ((Test-Path $script:PB.DataRoot) -and @(Get-ChildItem $script:PB.DataRoot -Force).Count) {
-            throw "$($script:PB.DataRoot) уже есть и это не клон — убери или переименуй папку"
+            throw "Папка $($script:PB.DataRoot) уже существует и не является клоном репозитория. Переименуйте или удалите её."
         }
         & gh repo view $repo --json name *> $null
         if ($LASTEXITCODE -ne 0) {
-            Step "Создаю приватную репу $repo…"
-            & gh repo create $repo --private --add-readme --description 'Мои данные для pc-base' *> $null
-            if ($LASTEXITCODE -ne 0) { throw "Не создалась репа $repo" }
+            Step "Создание приватного репозитория $repo…"
+            & gh repo create $repo --private --add-readme --description 'Мои данные для Tabula Rasa' *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Не удалось создать репозиторий $repo." }
         }
-        Step "Клонирую $repo…"
+        Step "Клонирование $repo…"
         & git clone -q "https://github.com/$repo.git" $script:PB.DataRoot 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Не склонировалась $repo" }
+        if ($LASTEXITCODE -ne 0) { throw "Не удалось клонировать $repo." }
     }
     [void](Invoke-PbGit config user.name $login)
     [void](Invoke-PbGit config user.email "$id+$login@users.noreply.github.com")
@@ -256,17 +256,17 @@ function Connect-PbData ($Sync) {
 
 # ---------- отключение ----------
 
-# что сотрёт «Отключить и стереть с этого ПК» — для подтверждения
+# что удалит «Отключить и удалить с этого компьютера» — для подтверждения
 function Get-PbEraseList {
     $l = @()
-    if (Test-Path $script:PB.DataRoot) { $l += "папка $($script:PB.DataRoot) целиком (неотправленное пропадёт)" }
+    if (Test-Path $script:PB.DataRoot) { $l += "папка $($script:PB.DataRoot) со всем содержимым" }
     if (Get-Command gh -ErrorAction SilentlyContinue) { $l += 'вход в GitHub CLI (gh auth logout)' }
     $l += 'сохранённый пароль/токен git для github.com (Диспетчер учётных данных)'
     $l += 'настройку git «брать токен из gh» для github.com'
     return $l
 }
 
-# «обслужил чужой ПК — ушёл чистым». Возвращает список того, что не получилось
+# после обслуживания чужого компьютера: личные данные и вход удаляются. Возвращает список того, что не удалось
 function Disconnect-PbData {
     $fail = @()
     Update-PbPath
@@ -281,7 +281,7 @@ function Disconnect-PbData {
             Where-Object { $_ -match 'account (\S+)' } | ForEach-Object { if ($_ -match 'account (\S+)') { $Matches[1] } })
         foreach ($u in $users) { & gh auth logout --hostname github.com --user $u *> $null }
         & gh auth status --hostname github.com *> $null
-        if ($LASTEXITCODE -eq 0) { $fail += 'gh всё ещё вошёл в github.com' }
+        if ($LASTEXITCODE -eq 0) { $fail += 'вход gh в github.com сохранился' }
     }
     if (Get-Command git -ErrorAction SilentlyContinue) {
         foreach ($h in 'github.com', 'gist.github.com') {

@@ -1,6 +1,6 @@
-﻿# Профиль PowerShell 7, встроенный в pc-base. Свой профиль кладётся в configs\pwsh_profile.ps1 своих данных
-# (C:\pc-base-private) и перекрывает этот. Правится там, а не на месте: при следующем прогоне setup.ps1
-# файл перезапишется (старый уедет в .bak).
+﻿# Профиль PowerShell 7, встроенный в Tabula Rasa. Собственный профиль хранится в configs\pwsh_profile.ps1
+# «Моих данных» (C:\tabula-rasa-private) и заменяет этот. Изменения вносятся там: при следующем прогоне setup.ps1
+# установленный профиль перезаписывается (предыдущий сохраняется как .bak).
 
 # --- PSReadLine: подсказки из истории, Tab-меню, поиск по истории стрелками ---
 if (Get-Module -ListAvailable -Name PSReadLine) {
@@ -42,5 +42,5 @@ function touch {
         if (Test-Path $f) { (Get-Item $f).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $f | Out-Null }
     }
 }
-function cdb { Set-Location 'C:\pc-base' }
+function cdb { Set-Location 'C:\tabula-rasa' }
 Set-Alias -Name g -Value git

@@ -1,11 +1,11 @@
-﻿# pc-base: окно выбора на WPF (есть в Windows PowerShell 5.1 из коробки, внешних библиотек нет).
+﻿# Tabula Rasa: окно выбора на WPF (есть в Windows PowerShell 5.1 из коробки, внешних библиотек нет).
 # Разметка и стили — lib\ui\*.xaml, модель для привязок — lib\ui\model.cs. WPF нужен STA-поток:
 # setup.ps1 перезапускает себя с -STA, если запущен иначе.
 #   * слева навигация: Программы / Настройки Windows / Файлы с Диска по категориям со счётчиками, внизу «Итог»
 #   * в центре карточки категории; значки ⚙ (есть ConfigFn), мастер, необратимо, сайт видны без клика
 #   * справа подробности выделенного; у программ с ConfigFn — «Установка: с моими настройками / чистая»
 #   * поиск сверху — сразу по всем разделам; «Сохранения ▾» — свои наборы галочек (lib\data.ps1)
-#   * слева внизу «Мои данные»: подключить (вход в GitHub, клон своей приватной репы), отправить, отключить и стереть
+#   * слева внизу «Мои данные»: подключить (вход в GitHub, клон своего приватного репозитория), отправить, отключить и удалить
 #   * тема и акцент — как в Windows
 #
 # Возвращает @{ Apps; Configs; Tweaks; Files; FilesAsk; Name; DryRun } или $null, если окно закрыли.
@@ -74,14 +74,14 @@ function Set-UiPalette ($Res, $Theme) {
     $Res['UiFont'] = (New-Object Windows.Media.FontFamily $Theme.Font).PSObject.BaseObject
 }
 
-# значок окна: монограмма «pb» на плашке цвета акцента. Рисуется на лету — бинарных файлов в репе нет
+# значок окна: монограмма «TR» на плашке цвета акцента. Рисуется на лету — бинарных файлов в репозитории нет
 function New-UiIcon ($Res, [int]$Size = 64) {
     $dv = New-Object Windows.Media.DrawingVisual
     $dc = $dv.RenderOpen()
     $r = $Size * 0.22
     $dc.DrawRoundedRectangle($Res['Accent'], $null, (New-Object Windows.Rect 0, 0, $Size, $Size), $r, $r)
     $tf = New-Object Windows.Media.Typeface (New-Object Windows.Media.FontFamily 'Segoe UI'), 'Normal', 'Bold', 'Normal'
-    $ft = New-Object Windows.Media.FormattedText 'pb', ([Globalization.CultureInfo]::InvariantCulture), 'LeftToRight', $tf, ($Size * 0.56), $Res['AccentFg']
+    $ft = New-Object Windows.Media.FormattedText 'TR', ([Globalization.CultureInfo]::InvariantCulture), 'LeftToRight', $tf, ($Size * 0.56), $Res['AccentFg']
     $g = $ft.BuildGeometry((New-Object Windows.Point 0, 0))
     $b = $g.Bounds
     $g.Transform = New-Object Windows.Media.TranslateTransform (($Size - $b.Width) / 2 - $b.X), (($Size - $b.Height) / 2 - $b.Y)
@@ -104,7 +104,7 @@ function Initialize-Ui {
     if ($script:PbUiTheme) { return $script:PbUiTheme }
     if (-not ('PcBase.Item' -as [type])) { Add-Type -Path (Join-Path $script:PbUiDir 'model.cs') }
     [PcBase.Native]::EnableDpiAwareness()
-    [PcBase.Native]::SetAppId('pc-base')
+    [PcBase.Native]::SetAppId('iheeae.tabula-rasa')
     [AppContext]::SetSwitch('Switch.System.Windows.DoNotScaleForDpiChanges', $false)
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
     # Application нужен, чтобы стили видели и всплывающие меню/подсказки; Run() не зовём, окна — через ShowDialog
@@ -131,7 +131,7 @@ function New-UiWindow ([string]$Xaml, $Theme) {
 # сообщение / подтверждение в стиле окна. $Lines — строки или @{ Text; Tone = 'danger'|'muted'|'strong' }.
 # Возвращает $true, если нажата главная кнопка. С -WithInput — поле ввода, возвращает введённое или $null.
 function Show-UiMessage {
-    param($Owner, [string]$Title, $Lines, [string]$Primary = 'Понятно', [string]$Secondary, [switch]$SafeDefault,
+    param($Owner, [string]$Title, $Lines, [string]$Primary = 'ОК', [string]$Secondary, [switch]$SafeDefault,
         [switch]$WithInput, [string]$InputValue)
     $theme = Initialize-Ui
     $d = New-UiWindow 'dialog.xaml' $theme
@@ -186,12 +186,12 @@ function New-FileItem ($File, [string]$CatKey, [string]$Group) {
     $sz = if ($File.PSIsContainer) { 'папка' } else { Format-Size $File.Length }
     $dt = $File.LastWriteTime.ToString('dd.MM.yyyy')
     $it.Desc = "$sz · изменён $dt"
-    $it.FullDesc = 'Скопируется с Диска в «Рабочий стол\pc-base-exe». Ничего не ставится — запускаешь сам.'
+    $it.FullDesc = 'Файл будет скопирован с Диска в папку «Рабочий стол\pc-base-exe». Установка не выполняется.'
     $it.CatKey = $CatKey; $it.CatName = $Group; $it.GroupTitle = $Group
     $it.SearchText = "$($File.Name)`nдиск`npc-base-exe"
     $it.Facts.Add((New-Fact 'Размер' $sz))
     $it.Facts.Add((New-Fact 'Изменён' $dt))
-    $it.Facts.Add((New-Fact 'Что будет' 'Только скачать'))
+    $it.Facts.Add((New-Fact 'Действие' 'Только копирование'))
     return $it
 }
 
@@ -231,9 +231,10 @@ function Show-SelectionDialog {
         $Apps, $Tweaks,
         $DriveItems,                 # файлы pc-base-exe, если Диск уже виден; $null — не виден
         [hashtable]$Initial,         # сохранение, с которым открыть окно (Read-SaveFile)
+        [string[]]$Notices,          # что сказать при открытии (переезд папок и т. п.)
         [bool]$DryRun = $true,
         [bool]$IsDomain = $false,
-        [string]$Title = 'pc-base'
+        [string]$Title = 'Tabula Rasa'
     )
 
     $theme = Initialize-Ui
@@ -257,7 +258,7 @@ function Show-SelectionDialog {
     $nav = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
     $cats = [ordered]@{}            # CatKey -> NavEntry
     $first = @{}                    # раздел -> первая категория (Ctrl+1/2/3)
-    $secLabel = @{ apps = 'Программы'; tweaks = 'Настройки Windows'; files = 'Файлы с Google Drive — только скачать, ничего не ставится' }
+    $secLabel = @{ apps = 'Программы'; tweaks = 'Настройки Windows'; files = 'Файлы с Google Drive копируются на компьютер без установки' }
     function Add-Nav ([string]$Kind, [string]$Section, [string]$Name, [string]$Key) {
         $e = New-Object PcBase.NavEntry
         $e.Kind = $Kind; $e.Section = $Section; $e.Name = $Name; $e.Key = $Key
@@ -275,16 +276,17 @@ function Show-SelectionDialog {
             $it.Key = 'app:' + $a.Id; $it.Kind = 'app'; $it.Id = $a.Id; $it.Name = $a.Name
             $it.Desc = $a.Desc; $it.FullDesc = $a.Desc
             $it.CatKey = $ck; $it.CatName = "Программы · $($grp.Name)"; $it.GroupTitle = $it.CatName
-            $it.Interactive = [bool]$a.Interactive; $it.IsWeb = $a.Source -eq 'web'
+            $it.Interactive = [bool]$a.Interactive; $it.IsWeb = $a.Source -eq 'web'; $it.OpenSource = [bool]$a.OpenSource
             $it.HasConfig = [bool]$a.ConfigFn; $it.ConfigName = $a.ConfigName; $it.ConfigDesc = $a.ConfigDesc; $it.ConfigFile = $a.ConfigFile
-            $it.SearchText = @($a.Name, $a.Desc, $a.Id, $a.WingetId, $grp.Name, $a.Note) -join "`n"
+            $it.SearchText = @($a.Name, $a.Desc, $a.Id, $a.WingetId, $grp.Name, $a.Note, $(if ($a.OpenSource) { 'open source' })) -join "`n"
             if ($a.Source -eq 'web') {
-                $it.Facts.Add((New-Fact 'Источник' 'Официальный сайт: свежая версия, без валидной подписи издателя не запускается'))
+                $it.Facts.Add((New-Fact 'Источник' 'Официальный сайт: актуальная версия, запускается только с действительной подписью издателя'))
                 $it.Facts.Add((New-Fact 'Страница загрузки' $a.PageUrl 'mono'))
             } else { $it.Facts.Add((New-Fact 'Источник' "winget: $($a.WingetId)" 'mono')) }
-            if ($a.Note) { $it.Facts.Add((New-Fact 'Пометка' $a.Note)) }
-            if ($a.Interactive) { $it.Facts.Add((New-Fact 'Установка' 'Тихо не ставится: откроется мастер установки, пройти руками.')) }
-            if ($a.Manual) { $it.Facts.Add((New-Fact 'Потом руками' $a.Manual)) }
+            if ($a.Note) { $it.Facts.Add((New-Fact 'Примечание' $a.Note)) }
+            if ($a.Interactive) { $it.Facts.Add((New-Fact 'Установка' 'Тихая установка невозможна: откроется мастер установки.')) }
+            if ($a.License) { $it.Facts.Add((New-Fact 'Лицензия' $a.License)) }
+            if ($a.Manual) { $it.Facts.Add((New-Fact 'Вручную после установки' $a.Manual)) }
             $items.Add($it)
         }
     }
@@ -300,8 +302,8 @@ function Show-SelectionDialog {
             $it.CatKey = $ck; $it.CatName = "Настройки Windows · $($grp.Name)"; $it.GroupTitle = $it.CatName
             $it.Irreversible = [bool]$t.Irreversible
             $it.SearchText = @($t.Name, $t.Desc, $t.Id, $grp.Name, $t.Manual) -join "`n"
-            if ($t.Irreversible) { $it.Facts.Add((New-Fact 'Необратимо' 'undo.ps1 это не вернёт, только точка восстановления.' 'danger')) }
-            if ($t.Manual) { $it.Facts.Add((New-Fact 'Потом руками' $t.Manual)) }
+            if ($t.Irreversible) { $it.Facts.Add((New-Fact 'Необратимо' 'Не отменяется через undo.ps1, только точкой восстановления.' 'danger')) }
+            if ($t.Manual) { $it.Facts.Add((New-Fact 'Вручную после применения' $t.Manual)) }
             $items.Add($it)
         }
     }
@@ -313,14 +315,14 @@ function Show-SelectionDialog {
     if ($driveOnline) {
         foreach ($i in $DriveItems) { $items.Add((New-FileItem $i $fk 'Файлы с Диска · pc-base-exe')) }
     } else {
-        $secLabel.files = 'Google Drive на этом ПК сейчас не виден'
+        $secLabel.files = 'Google Drive на этом компьютере не подключён'
         $it = New-Object PcBase.Item
-        $it.Key = 'files:ask'; $it.Kind = 'ask'; $it.Id = 'ask'; $it.Name = 'Диск сейчас не подключён'
-        $it.Desc = 'Отметь — выбрать файлы во время прогона'
-        $it.FullDesc = 'Google Drive на этом ПК сейчас не виден, поэтому списка файлов нет. Отметь — во время прогона pc-base подключит Диск (поставит Google Drive и попросит войти) и покажет список pc-base-exe с галочками.'
+        $it.Key = 'files:ask'; $it.Kind = 'ask'; $it.Id = 'ask'; $it.Name = 'Google Drive не подключён'
+        $it.Desc = 'Выбор файлов во время прогона'
+        $it.FullDesc = 'Google Drive на этом компьютере не подключён, поэтому список файлов недоступен. Если отметить этот пункт, во время прогона будет установлен Google Drive, запрошен вход и показан список файлов папки pc-base-exe.'
         $it.CatKey = $fk; $it.CatName = 'Файлы с Диска · pc-base-exe'; $it.GroupTitle = $it.CatName
         $it.SearchText = "диск`npc-base-exe`nфайлы`ngoogle drive"
-        $it.Facts.Add((New-Fact 'Что будет' 'Только скачать: файлы копируются в «Рабочий стол\pc-base-exe», ничего не ставится.'))
+        $it.Facts.Add((New-Fact 'Действие' 'Файлы копируются в папку «Рабочий стол\pc-base-exe» без установки.'))
         $items.Add($it)
     }
     $navSummary = New-Object PcBase.NavEntry
@@ -407,19 +409,19 @@ function Show-SelectionDialog {
         switch ($ui.Mode) {
             'search' {
                 $ctl.ListTitle.Text = "Поиск: «$($ctl.Search.Text.Trim())»"
-                $ctl.ListHint.Text = "Найдено: $n  ·  клик по категории слева — перейти туда, Esc — очистить"
-                $ctl.ListEmpty.Text = 'Ничего не нашлось. Ищется по названию, описанию, id, winget-ID и категории.'
+                $ctl.ListHint.Text = "Найдено: $n  ·  выберите категорию слева, чтобы перейти к ней; Esc — очистить поиск"
+                $ctl.ListEmpty.Text = 'Ничего не найдено. Поиск выполняется по названию, описанию, идентификатору, winget-ID и категории.'
             }
             'summary' {
                 $ctl.ListTitle.Text = 'Итог'
-                $ctl.ListHint.Text = 'Всё, что отмечено, по разделам. Сними галочку, если передумал'
+                $ctl.ListHint.Text = 'Все отмеченные пункты по разделам. Снимите отметку, чтобы исключить пункт'
                 $ctl.ListEmpty.Text = 'Пока ничего не выбрано.'
             }
             default {
                 $e = $cats[$ui.Cat]
                 $ctl.ListTitle.Text = $e.Name
                 $ctl.ListHint.Text = $secLabel[$e.Section]
-                $ctl.ListEmpty.Text = if ($e.Section -eq 'files') { 'Папка pc-base-exe на Диске пуста.' } else { 'Здесь пусто.' }
+                $ctl.ListEmpty.Text = if ($e.Section -eq 'files') { 'Папка pc-base-exe на Диске пуста.' } else { 'В этой категории нет пунктов.' }
             }
         }
         $ctl.ListEmpty.Visibility = if ($n) { 'Collapsed' } else { 'Visible' }
@@ -496,27 +498,27 @@ function Show-SelectionDialog {
 
     function Import-Save ([string]$Path) {
         try { $s = Read-SaveFile $Path }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Сохранение не читается' -Lines @($Path, @{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось открыть сохранение' -Lines @($Path, @{ Text = $_.Exception.Message; Tone = 'muted' })); return }
         $miss = Set-Selection $s
         Set-SaveName $s.Name
         $msg = "Открыто «$($s.Name)»"
-        if ($s.Machine) { $msg += " — сохранено на $($s.Machine), $($s.Created.ToString('dd.MM.yyyy HH:mm'))" }
-        if ($miss) { Show-Notice "$msg. Пропущено пунктов, которых нет в каталоге этого ПК (удалены или не для этой версии Windows): $miss." 'warn' }
+        if ($s.Machine) { $msg += " (компьютер $($s.Machine), $($s.Created.ToString('dd.MM.yyyy HH:mm')))" }
+        if ($miss) { Show-Notice "$msg. Пропущено пунктов, отсутствующих в каталоге этого компьютера (удалены или не поддерживаются этой версией Windows): $miss." 'warn' }
         else { Show-Notice $msg }
     }
 
     # пока идёт фоновая отправка или подключение, git своих данных трогать нельзя
     function Test-DataBusy {
         if (-not $ui.Job) { return $false }
-        Show-Notice 'Подожди пару секунд: идёт обмен с GitHub.' 'warn'
+        Show-Notice 'Выполняется синхронизация с GitHub. Повторите действие через несколько секунд.' 'warn'
         return $true
     }
 
     function Save-Current {
         if (Test-DataBusy) { return }
         $c = Get-Chosen
-        $where = if (Test-PbDataConnected) { "В Мои данные ($($script:PB.DataRoot)) и сразу в GitHub — увидишь на любом своём ПК." }
-                 else { "На этом ПК ($(Get-PbLocalSaveDir)). Подключишь Мои данные — предложу перенести." }
+        $where = if (Test-PbDataConnected) { "Сохранение будет записано в «Мои данные» ($($script:PB.DataRoot)) и отправлено в GitHub. Оно станет доступно на всех компьютерах." }
+                 else { "Сохранение будет записано на этом компьютере ($(Get-PbLocalSaveDir)). После подключения «Моих данных» его можно перенести." }
         $def = if ($ui.SaveName) { $ui.SaveName } else { 'Мой набор' }
         $name = Show-UiMessage -Owner $win -Title 'Сохранить текущее' -WithInput -InputValue $def -Primary 'Сохранить' -Secondary 'Отмена' `
             -Lines @("Отмечено: $($ctl.Summary.Text)", @{ Text = $where; Tone = 'muted' })
@@ -524,13 +526,13 @@ function Show-SelectionDialog {
         $name = $name.Trim()
         if (-not $name) { return }
         if (@(Get-PbSaves | Where-Object { $_.Name -eq $name }).Count -and $name -ne $ui.SaveName) {
-            if (-not (Show-UiMessage -Owner $win -Title "«$name» уже есть" -Lines @('Перезаписать его текущими галочками?') -Primary 'Перезаписать' -Secondary 'Назад' -SafeDefault)) { return }
+            if (-not (Show-UiMessage -Owner $win -Title "«$name» уже существует" -Lines @('Заменить сохранение текущим выбором?') -Primary 'Заменить' -Secondary 'Назад' -SafeDefault)) { return }
         }
         try { [void](Save-PbSave $name $c) }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не сохранилось' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось сохранить' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
         Set-SaveName $name
-        if (Test-PbDataConnected) { Show-Notice "Сохранено «$name» в Мои данные, отправляю в GitHub…"; Start-DataJob 'push' }
-        else { Show-Notice "Сохранено «$name» на этом ПК." }
+        if (Test-PbDataConnected) { Show-Notice "Сохранено «$name» в «Мои данные». Отправка в GitHub…"; Start-DataJob 'push' }
+        else { Show-Notice "Сохранено «$name» на этом компьютере." }
         Update-DataBox
     }
 
@@ -541,22 +543,22 @@ function Show-SelectionDialog {
         if ($null -eq $new -or -not $new.Trim() -or $new.Trim() -eq $old) { return }
         $new = $new.Trim()
         try { [void](Rename-PbSave $Path $new) }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не переименовалось' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось переименовать' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
         if ($ui.SaveName -eq $old) { Set-SaveName $new }
-        Show-Notice "«$old» → «$new»"
+        Show-Notice "Сохранение «$old» переименовано в «$new»."
         if (Test-PbDataConnected) { Start-DataJob 'push' }
     }
 
     function Remove-Save ([string]$Path) {
         if (Test-DataBusy) { return }
         $name = (Read-SaveFile $Path).Name
-        $lines = @("Сохранение «$name» пропадёт с этого ПК.")
-        if (Test-PbDataConnected) { $lines += @{ Text = 'Оно в Моих данных: удалится и на GitHub, но останется в истории репы.'; Tone = 'muted' } }
+        $lines = @("Сохранение «$name» будет удалено.")
+        if (Test-PbDataConnected) { $lines += @{ Text = 'Сохранение будет удалено и из репозитория на GitHub, но останется в его истории.'; Tone = 'muted' } }
         if (-not (Show-UiMessage -Owner $win -Title 'Удалить сохранение?' -Lines $lines -Primary 'Удалить' -Secondary 'Назад' -SafeDefault)) { return }
         try { Remove-PbSave $Path }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалилось' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось удалить' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })); return }
         if ($ui.SaveName -eq $name) { Set-SaveName $null }
-        Show-Notice "Удалено «$name»."
+        Show-Notice "Сохранение «$name» удалено."
         if (Test-PbDataConnected) { Start-DataJob 'push' }
     }
 
@@ -585,7 +587,7 @@ function Show-SelectionDialog {
         $saves = @(Get-PbSaves)
         [void]$m.Items.Add((New-MenuText $(if (Test-PbDataConnected) { 'В МОИХ ДАННЫХ' } else { 'НА ЭТОМ ПК' }) 'SectionLabel'))
         if (-not $saves.Count) {
-            [void]$m.Items.Add((New-MenuText 'Сохранений пока нет. «Сохранить текущее…» запишет то, что отмечено сейчас.' 'Muted'))
+            [void]$m.Items.Add((New-MenuText 'Сохранений нет. Чтобы сохранить текущий выбор, используйте «Сохранить текущее…».' 'Muted'))
         }
         foreach ($s in $saves) {
             $mi = New-Object Windows.Controls.MenuItem
@@ -625,8 +627,8 @@ function Show-SelectionDialog {
             $ok = [bool](Find-PbConfig $it.ConfigFile)
             $it.ConfigAvailable = $ok
             $it.ConfigHint = if ($ok) { '' }
-                elseif ($on) { "В Моих данных нет configs\$($it.ConfigFile). Сними настройки на настроенном ПК инструментом из tools\ и отправь в свою репу." }
-                else { 'Своих настроек на этом ПК нет: подключи Мои данные (слева внизу) — и вариант станет доступен.' }
+                elseif ($on) { "В «Моих данных» нет файла configs\$($it.ConfigFile). Настройки снимаются на настроенном компьютере инструментом из папки tools." }
+                else { 'Сохранённые настройки недоступны: подключите «Мои данные» (слева внизу).' }
         }
     }
 
@@ -642,7 +644,7 @@ function Show-SelectionDialog {
         $tone = 'TextMuted'
         Set-DataBtnWide ([bool]($ui.Job -and $ui.Job.Action -eq 'connect') -or -not (Test-PbDataConnected))
         if ($ui.Job) {
-            $ctl.DataStatus.Text = if ($ui.Job.Sync.Step) { $ui.Job.Sync.Step } else { 'обмен с GitHub…' }
+            $ctl.DataStatus.Text = if ($ui.Job.Sync.Step) { $ui.Job.Sync.Step } else { 'синхронизация с GitHub…' }
             $ctl.DataBtn.Content = if ($ui.Job.Action -eq 'connect') { 'Отмена' } else { '…' }
             $ctl.DataBtn.IsEnabled = $ui.Job.Action -eq 'connect'
         } else {
@@ -651,7 +653,7 @@ function Show-SelectionDialog {
             if (-not $st.Connected) {
                 $ctl.DataStatus.Text = 'не подключены'
                 $ctl.DataBtn.Content = 'Подключить'
-                $ctl.DataBtn.ToolTip = 'Войти в GitHub и подключить свою приватную репу: сохранения на всех ПК, свои настройки программ'
+                $ctl.DataBtn.ToolTip = 'Вход в GitHub и подключение приватного репозитория: сохранения и настройки программ на всех компьютерах'
             } else {
                 $tone = if ($st.Pending) { 'Danger' } else { 'AccentText' }
                 $ctl.DataStatus.Text = "подключены$(if ($st.User) { " ($($st.User))" })$(if ($st.Pending) { " · не отправлено: $($st.Pending)" })"
@@ -687,26 +689,26 @@ function Show-SelectionDialog {
     function Complete-DataJob ($Job, $Result, [string]$Err) {
         $ctl.DataLogin.Visibility = 'Collapsed'; $ui.CodeShown = $null
         if ($Job.Action -eq 'push') {
-            if (-not $Err -and @($Result)[-1] -eq $true) { $ctl.NoticeText.Text = $ctl.NoticeText.Text -replace ', отправляю в GitHub…$', ' и отправлено в GitHub.' -replace '^Обмениваюсь с GitHub…$', 'Мои данные синхронизированы с GitHub.' }
-            else { Show-Notice 'Нет связи с GitHub: всё записано в Мои данные на этом ПК и уйдёт при следующем запуске.' 'warn' }
+            if (-not $Err -and @($Result)[-1] -eq $true) { $ctl.NoticeText.Text = $ctl.NoticeText.Text -replace ' Отправка в GitHub…$', ' Отправлено в GitHub.' -replace '^Синхронизация с GitHub…$', '«Мои данные» синхронизированы с GitHub.' }
+            else { Show-Notice 'Нет связи с GitHub. Изменения сохранены на этом компьютере и будут отправлены при следующем запуске.' 'warn' }
             Update-DataBox
             if ($ui.PushAgain) { $ui.PushAgain = $false; Start-DataJob 'push' }
             return
         }
         Update-DataBox
-        if ($Err) { [void](Show-UiMessage -Owner $win -Title 'Мои данные не подключились' -Lines @(@{ Text = $Err; Tone = 'muted' })); return }
+        if ($Err) { [void](Show-UiMessage -Owner $win -Title 'Не удалось подключить «Мои данные»' -Lines @(@{ Text = $Err; Tone = 'muted' })); return }
         Update-ConfigAvail
         $login = @($Result)[-1]
-        Show-Notice "Мои данные подключены: $login → $($script:PB.DataRoot)."
+        Show-Notice "«Мои данные» подключены: $login, $($script:PB.DataRoot)."
         $local = @(Get-PbSaves -LocalOnly)
         if (-not $local.Count) { return }
         $names = ($local | ForEach-Object { "• $($_.Name)" }) -join "`n"
         $ok = Show-UiMessage -Owner $win -Title 'Перенести сохранения?' -Primary 'Перенести' -Secondary 'Оставить' -Lines @(
-            "На этом ПК есть сохранения, сделанные без входа: $($local.Count).", $names,
-            @{ Text = 'Перенесу в Мои данные и отправлю в GitHub; совпадёт имя — добавлю номер, ничего не пропадёт.'; Tone = 'muted'; Gap = $true })
+            "На этом компьютере есть сохранения, созданные без подключения: $($local.Count).", $names,
+            @{ Text = 'Сохранения будут перенесены в «Мои данные» и отправлены в GitHub. При совпадении имени к нему добавляется номер.'; Tone = 'muted'; Gap = $true })
         if (-not $ok) { return }
-        try { $n = Move-PbLocalSaves; Show-Notice "Перенесено в Мои данные: $n, отправляю в GitHub…"; Start-DataJob 'push' }
-        catch { [void](Show-UiMessage -Owner $win -Title 'Не перенеслось' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })) }
+        try { $n = Move-PbLocalSaves; Show-Notice "Перенесено в «Мои данные»: $n. Отправка в GitHub…"; Start-DataJob 'push' }
+        catch { [void](Show-UiMessage -Owner $win -Title 'Не удалось перенести сохранения' -Lines @(@{ Text = $_.Exception.Message; Tone = 'muted' })) }
     }
 
     $jobTimer.add_Tick({
@@ -729,24 +731,24 @@ function Show-SelectionDialog {
     })
 
     function Connect-Data {
-        $ok = Show-UiMessage -Owner $win -Title 'Подключить Мои данные?' -Primary 'Подключить' -Secondary 'Отмена' -Lines @(
-            'Откроется вход в GitHub в браузере — по одноразовому коду.',
-            "Мои данные — твоя приватная репа pc-base-private на GitHub (нет — создам) с клоном в $($script:PB.DataRoot): сохранения на всех ПК и свои настройки программ.",
-            @{ Text = 'Без входа всё работает и так. Уйти с чужого ПК чисто — «Отключить и стереть с этого ПК».'; Tone = 'muted'; Gap = $true })
+        $ok = Show-UiMessage -Owner $win -Title 'Подключить «Мои данные»?' -Primary 'Подключить' -Secondary 'Отмена' -Lines @(
+            'Вход в GitHub выполняется в браузере по одноразовому коду.',
+            "Сохранения и настройки программ хранятся в приватном репозитории tabula-rasa-private на GitHub и доступны на всех компьютерах. Если репозитория нет, он будет создан. Локальная копия: $($script:PB.DataRoot).",
+            @{ Text = 'Без подключения доступны все функции, кроме личных сохранений и настроек программ. Чтобы удалить личные данные с компьютера, выберите «Отключить и удалить с этого компьютера».'; Tone = 'muted'; Gap = $true })
         if ($ok) { Start-DataJob 'connect' }
     }
 
     function Disconnect-Data {
         if (Test-DataBusy) { return }
         $st = Get-PbDataState
-        $lines = @('С этого ПК сотрётся:') + @(Get-PbEraseList | ForEach-Object { "• $_" })
-        if ($st.Pending) { $lines += @{ Text = "Не отправлено в GitHub: $($st.Pending) — пропадёт. Сначала «Отправить сейчас»."; Tone = 'danger'; Gap = $true } }
-        $lines += @{ Text = 'На GitHub ничего не удаляется: на другом ПК подключишься снова.'; Tone = 'muted'; Gap = $true }
-        if (-not (Show-UiMessage -Owner $win -Title 'Отключить и стереть с этого ПК?' -Lines $lines -Primary 'Стереть' -Secondary 'Назад' -SafeDefault)) { return }
+        $lines = @('С этого компьютера будет удалено:') + @(Get-PbEraseList | ForEach-Object { "• $_" })
+        if ($st.Pending) { $lines += @{ Text = "Изменения, не отправленные в GitHub ($($st.Pending)), будут потеряны. Чтобы сохранить их, сначала выберите «Отправить сейчас»."; Tone = 'danger'; Gap = $true } }
+        $lines += @{ Text = 'Данные на GitHub не удаляются. На другом компьютере их можно подключить снова.'; Tone = 'muted'; Gap = $true }
+        if (-not (Show-UiMessage -Owner $win -Title 'Отключить и удалить с этого компьютера?' -Lines $lines -Primary 'Удалить' -Secondary 'Назад' -SafeDefault)) { return }
         $fail = @(Disconnect-PbData)
         Update-ConfigAvail; Update-DataBox
         if ($ui.SaveName -and -not @(Get-PbSaves | Where-Object { $_.Name -eq $ui.SaveName }).Count) { Set-SaveName $null }
-        if ($fail.Count) { Show-Notice ('Стёрто не всё: ' + ($fail -join '; ')) 'warn' } else { Show-Notice 'Мои данные отключены, вход в GitHub и токены с этого ПК стёрты.' }
+        if ($fail.Count) { Show-Notice ('Удалено не всё: ' + ($fail -join '; ')) 'warn' } else { Show-Notice '«Мои данные» отключены. Данные, вход в GitHub и токены удалены с этого компьютера.' }
     }
 
     function Update-OkBtn {
@@ -850,7 +852,7 @@ function Show-SelectionDialog {
         if ($tag -eq '?save') { Save-Current }
         elseif ($tag -eq '?open') {
             $dlg = New-Object Microsoft.Win32.OpenFileDialog
-            $dlg.Filter = 'Сохранение pc-base (*.json)|*.json'
+            $dlg.Filter = 'Сохранение Tabula Rasa (*.json)|*.json'
             $d = Get-PbSaveDir; if (Test-Path $d) { $dlg.InitialDirectory = $d }
             if ($dlg.ShowDialog($win)) { Import-Save $dlg.FileName }
         } else { Import-Save $tag }
@@ -880,7 +882,7 @@ function Show-SelectionDialog {
         $acts = @()
         if ($st.Pending) { $acts += , @("Отправить сейчас (не отправлено: $($st.Pending))", 'push') } else { $acts += , @('Обновить из GitHub', 'push') }
         $acts += , @("Открыть папку $($script:PB.DataRoot)", 'open')
-        $acts += , @('Отключить и стереть с этого ПК…', 'erase')
+        $acts += , @('Отключить и удалить с этого компьютера…', 'erase')
         foreach ($p in $acts) { $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi) }
         $m.PlacementTarget = $ctl.DataBtn
         $m.IsOpen = $true
@@ -888,7 +890,7 @@ function Show-SelectionDialog {
     $ctl.DataBtn.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
         param($s, $e)
         switch ([string]$e.Source.Tag) {
-            'push'  { Show-Notice 'Обмениваюсь с GitHub…'; Start-DataJob 'push' }
+            'push'  { Show-Notice 'Синхронизация с GitHub…'; Start-DataJob 'push' }
             'open'  { Start-Process explorer.exe $script:PB.DataRoot }
             'erase' { Disconnect-Data }
         }
@@ -927,23 +929,23 @@ function Show-SelectionDialog {
         $name = if ($IsDomain) { '' } else { $ctl.PcName.Text.Trim() }
         if ($name -and ($name -notmatch '^[A-Za-z0-9-]{1,15}$' -or $name -match '^\d+$')) {
             $ctl.PcName.SetResourceReference([Windows.Controls.Control]::BorderBrushProperty, 'Danger')
-            [void](Show-UiMessage -Owner $win -Title 'Имя ПК не подходит' -Lines @('Латиница, цифры и дефис, до 15 символов, не одни цифры. Пусто — имя не трогать.'))
+            [void](Show-UiMessage -Owner $win -Title 'Недопустимое имя компьютера' -Lines @('Допустимы латинские буквы, цифры и дефис, не более 15 символов; имя не может состоять только из цифр. Оставьте поле пустым, чтобы не менять имя.'))
             [void]$ctl.PcName.Focus()
             return
         }
         $c = Get-Chosen
         if (-not $c.Apps.Count -and -not $c.Tweaks.Count -and -not $c.Files.Count -and -not $c.FilesAsk -and -not $name) {
-            [void](Show-UiMessage -Owner $win -Title 'Ничего не выбрано' -Lines @('Отметь хотя бы одну программу, настройку или файл — или впиши новое имя ПК.'))
+            [void](Show-UiMessage -Owner $win -Title 'Ничего не выбрано' -Lines @('Отметьте хотя бы одну программу, настройку или файл либо укажите новое имя компьютера.'))
             return
         }
         if ($ctl.ModeApply.IsChecked) {
             $irr = @($Tweaks | Where-Object { $_.Irreversible -and $c.Tweaks -contains $_.Id }).Count
             $lines = @("Программ: $($c.Apps.Count)$(if ($c.Configs.Count) { ", из них с моими настройками: $($c.Configs.Count)" })",
                 "Настроек Windows: $($c.Tweaks.Count)")
-            if ($irr) { $lines += @{ Text = "Необратимых: $irr — откат только точкой восстановления"; Tone = 'danger' } }
+            if ($irr) { $lines += @{ Text = "Необратимых изменений: $irr. Их можно отменить только точкой восстановления."; Tone = 'danger' } }
             if ($c.Files.Count) { $lines += "Файлов с Диска: $($c.Files.Count)" } elseif ($c.FilesAsk) { $lines += 'Файлы с Диска: выбрать во время прогона' }
-            $lines += if ($name) { "Имя ПК: $env:COMPUTERNAME → $($name.ToUpper())" } else { "Имя ПК: $env:COMPUTERNAME, не меняется" }
-            $lines += @{ Text = 'Это боевой прогон: изменения применятся сразу. Перед ними создаётся точка восстановления, откат — undo.ps1.'; Tone = 'muted'; Gap = $true }
+            $lines += if ($name) { "Имя компьютера: $env:COMPUTERNAME → $($name.ToUpper())" } else { "Имя компьютера: $env:COMPUTERNAME (без изменений)" }
+            $lines += @{ Text = 'Изменения будут применены сразу. Перед применением создаётся точка восстановления; отмена — undo.ps1.'; Tone = 'muted'; Gap = $true }
             if (-not (Show-UiMessage -Owner $win -Title "Применить к $($env:COMPUTERNAME)?" -Lines $lines -Primary 'Применить' -Secondary 'Назад' -SafeDefault)) { return }
         }
         $ui.Result = $c; $ui.Name = $name
@@ -973,8 +975,9 @@ function Show-SelectionDialog {
     if ($Initial) {
         $miss = Set-Selection $Initial
         Set-SaveName $Initial.Name
-        if ($miss) { Show-Notice "Открыто «$($Initial.Name)». Пропущено пунктов, которых нет в каталоге этого ПК: $miss." 'warn' }
+        if ($miss) { Show-Notice "Открыто «$($Initial.Name)». Пропущено пунктов, отсутствующих в каталоге этого компьютера: $miss." 'warn' }
     }
+    if (@($Notices | Where-Object { $_ }).Count) { Show-Notice (@($Notices | Where-Object { $_ }) -join ' ') 'warn' }
     Update-OkBtn
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
     $ctl.Nav.SelectedItem = $start

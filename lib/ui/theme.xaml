@@ -1,5 +1,5 @@
 ﻿<!--
-  pc-base: общие стили окон (главное окно, файлы с Диска, диалоги).
+  Tabula Rasa: общие стили окон (главное окно, файлы с Диска, диалоги).
   Цвета сюда не зашиты: кисти Bg, Surface, Accent и т.д. кладёт Set-UiPalette из lib\gui.ps1
   по теме Windows (светлая/тёмная) и системному акценту. Сетка 8 px, кнопки и поля — 32 px.
 -->
@@ -112,7 +112,7 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentText}"/>
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="BorderBrush" Value="{DynamicResource AccentText}"/>
-        <Setter Property="ToolTip" Value="Есть вариант «с моими настройками». Клик — включить"/>
+        <Setter Property="ToolTip" Value="Доступна установка с сохранёнными настройками. Нажмите, чтобы включить"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -140,13 +140,13 @@
                 <Setter Property="Background" Value="{DynamicResource Accent}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
                 <Setter Property="Foreground" Value="{DynamicResource AccentFg}"/>
-                <Setter Property="ToolTip" Value="Ставится с твоими настройками. Клик — чистая установка"/>
+                <Setter Property="ToolTip" Value="Установка с сохранёнными настройками. Нажмите, чтобы выбрать чистую установку"/>
             </DataTrigger>
             <!-- файла настроек нет нигде: значок серый, клик только выделяет карточку -->
             <DataTrigger Binding="{Binding ConfigAvailable}" Value="False">
                 <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource ControlBorder}"/>
-                <Setter Property="ToolTip" Value="Своих настроек на этом ПК нет: подключи свои данные"/>
+                <Setter Property="ToolTip" Value="Сохранённые настройки недоступны: подключите «Мои данные»"/>
             </DataTrigger>
         </Style.Triggers>
     </Style>
@@ -395,15 +395,19 @@
                                 <Button Style="{StaticResource ConfigBadge}" Tag="cfg"
                                         Visibility="{Binding HasConfig, Converter={StaticResource Vis}}"/>
                                 <Border Style="{StaticResource Pill}" Visibility="{Binding Interactive, Converter={StaticResource Vis}}"
-                                        ToolTip="Тихо не ставится: откроется мастер установки, пройти руками">
+                                        ToolTip="Тихая установка невозможна: откроется мастер установки">
                                     <TextBlock Text="мастер" VerticalAlignment="Center"/>
                                 </Border>
                                 <Border Style="{StaticResource DangerPill}" Visibility="{Binding Irreversible, Converter={StaticResource Vis}}"
-                                        ToolTip="undo.ps1 это не вернёт, только точка восстановления">
+                                        ToolTip="Не отменяется через undo.ps1, только точкой восстановления">
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
                                 </Border>
+                                <Border Style="{StaticResource Pill}" Visibility="{Binding OpenSource, Converter={StaticResource Vis}}"
+                                        ToolTip="Открытый исходный код">
+                                    <TextBlock Text="Open source" VerticalAlignment="Center"/>
+                                </Border>
                                 <Border Style="{StaticResource Pill}" Visibility="{Binding IsWeb, Converter={StaticResource Vis}}"
-                                        ToolTip="Качается с официального сайта, цифровая подпись проверяется">
+                                        ToolTip="Загружается с официального сайта с проверкой цифровой подписи">
                                     <TextBlock Text="сайт" VerticalAlignment="Center"/>
                                 </Border>
                             </StackPanel>

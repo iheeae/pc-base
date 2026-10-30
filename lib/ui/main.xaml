@@ -1,10 +1,10 @@
 ﻿<!--
-  pc-base: главное окно выбора. Логика — в lib\gui.ps1 (Show-SelectionDialog), стили — в theme.xaml.
+  Tabula Rasa: главное окно выбора. Логика — в lib\gui.ps1 (Show-SelectionDialog), стили — в theme.xaml.
   Три колонки: навигация по категориям / карточки текущей категории / подробности выделенного.
 -->
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="pc-base" Width="1200" Height="760" MinWidth="960" MinHeight="600"
+        Title="Tabula Rasa" Width="1200" Height="760" MinWidth="960" MinHeight="600"
         WindowStartupLocation="CenterScreen" Topmost="True"
         Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}"
         FontFamily="{DynamicResource UiFont}" FontSize="14"
@@ -26,7 +26,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Image x:Name="Logo" Width="20" Height="20" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="pc-base" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock Text="Tabula Rasa" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <!-- имя ПК, ОС, «в домене» — чипами -->
                     <ItemsControl x:Name="HostChips" Margin="8,0,0,0" VerticalAlignment="Center" Focusable="False">
                         <ItemsControl.ItemsPanel>
@@ -88,7 +88,7 @@
                     <ListBox x:Name="NavBottom" ItemContainerStyle="{StaticResource NavItem}" ScrollViewer.VerticalScrollBarVisibility="Disabled"
                              KeyboardNavigation.TabNavigation="Once"/>
                 </Border>
-                <!-- Мои данные: своя приватная репа с сохранениями и настройками программ -->
+                <!-- Мои данные: свой приватный репозиторий с сохранениями и настройками программ -->
                 <Border Grid.Row="2" BorderBrush="{DynamicResource Border}" BorderThickness="0,1,0,0" Padding="16,12">
                     <StackPanel>
                         <Grid>
@@ -114,7 +114,7 @@
                         </Grid>
                         <!-- вход в GitHub: код с устройства -->
                         <StackPanel x:Name="DataLogin" Margin="0,12,0,0" Visibility="Collapsed">
-                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Text="Введи код на странице входа GitHub (он уже в буфере обмена):"/>
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Text="Введите код на странице входа GitHub (код скопирован в буфер обмена):"/>
                             <TextBox x:Name="DataCode" IsReadOnly="True" Margin="0,6,0,0" FontFamily="Consolas" FontSize="18" HorizontalContentAlignment="Center"/>
                             <Button x:Name="DataOpen" Content="Открыть страницу входа" Margin="0,8,0,0" Style="{StaticResource AccentButton}"/>
                         </StackPanel>
@@ -156,8 +156,8 @@
                             <TextBlock x:Name="ListHint" Style="{StaticResource Caption}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                         <StackPanel x:Name="CatButtons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Button x:Name="CatAll" Content="Всё" Margin="0,0,8,0" ToolTip="Отметить всё в этой категории (без «моих настроек»)"/>
-                            <Button x:Name="CatNone" Content="Нет" ToolTip="Снять всё в этой категории"/>
+                            <Button x:Name="CatAll" Content="Всё" Margin="0,0,8,0" ToolTip="Отметить все пункты категории (без варианта «с моими настройками»)"/>
+                            <Button x:Name="CatNone" Content="Нет" ToolTip="Снять отметку со всех пунктов категории"/>
                         </StackPanel>
                     </Grid>
                     <ListBox x:Name="List" Grid.Row="2" Padding="24,0,16,16" ItemContainerStyle="{StaticResource CardItem}"
@@ -183,7 +183,7 @@
                 <StackPanel x:Name="DetailHint" Margin="24" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Style="{StaticResource Glyph}" Text="&#xE8FD;" FontSize="32" HorizontalAlignment="Center"
                                Foreground="{DynamicResource TextMuted}"/>
-                    <TextBlock Text="Выдели пункт" Style="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,12,0,24"/>
+                    <TextBlock Text="Выберите пункт" Style="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,12,0,24"/>
                     <Grid HorizontalAlignment="Center">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -213,6 +213,10 @@
                         <StackPanel x:Name="Detail" Visibility="Collapsed">
                             <TextBlock Text="{Binding Name}" Style="{StaticResource Title}"/>
                             <TextBlock Text="{Binding CatName}" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
+                        <Border Style="{StaticResource Pill}" HorizontalAlignment="Left" Margin="0,8,0,0"
+                                Visibility="{Binding OpenSource, Converter={StaticResource Vis}}" ToolTip="Открытый исходный код">
+                            <TextBlock Text="Open source" VerticalAlignment="Center"/>
+                        </Border>
                             <CheckBox Content="Отмечено" IsChecked="{Binding IsChecked, Mode=TwoWay}" Margin="0,8,0,0"/>
                             <TextBlock Text="{Binding FullDesc}" TextWrapping="Wrap" LineHeight="20" Margin="0,8,0,0"/>
 
@@ -283,10 +287,10 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="PcNameLabel" Text="Имя ПК" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <TextBox x:Name="PcName" Grid.Column="1" Width="144" MaxLength="15" Tag="не менять"
-                         ToolTip="Латиница, цифры и дефис, до 15 символов. Пусто — имя не трогать"/>
-                <!-- в домене вместо поля: имя меняется только доменной учёткой, pc-base его не трогает -->
+                         ToolTip="Латинские буквы, цифры и дефис, не более 15 символов. Пустое поле — имя не меняется"/>
+                <!-- в домене вместо поля: имя меняется только доменной учётной записью, Tabula Rasa его не трогает -->
                 <TextBlock x:Name="PcNameFixed" Grid.ColumnSpan="2" VerticalAlignment="Center" Visibility="Collapsed"
-                           ToolTip="ПК в домене: переименование требует доменной учётки, поэтому pc-base имя не трогает">
+                           ToolTip="Компьютер в домене: переименование требует доменной учётной записи, поэтому имя не меняется">
                     <Run Text="Имя ПК:"/> <Run x:Name="PcNameCur" FontWeight="SemiBold"/><Run Text="  ·  в домене, не меняется" Foreground="{DynamicResource TextMuted}"/>
                 </TextBlock>
                 <TextBlock Grid.Column="2" Text="Режим" VerticalAlignment="Center" Margin="16,0,8,0"/>
@@ -294,9 +298,9 @@
                         Background="{DynamicResource Control}">
                     <StackPanel Orientation="Horizontal">
                         <RadioButton x:Name="ModePlan" GroupName="Mode" Style="{StaticResource Segment}" Content="План" Height="30" Padding="12,0"
-                                     ToolTip="Только показать, что будет сделано. Ничего не меняется"/>
+                                     ToolTip="Показать, что будет сделано, без изменений в системе"/>
                         <RadioButton x:Name="ModeApply" GroupName="Mode" Style="{StaticResource Segment}" Content="Применить" Height="30" Padding="12,0"
-                                     ToolTip="Боевой прогон: перед стартом будет подтверждение"/>
+                                     ToolTip="Применить изменения. Перед запуском запрашивается подтверждение"/>
                     </StackPanel>
                 </Border>
                 <TextBlock x:Name="Summary" Grid.Column="4" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="16,0,16,0"
