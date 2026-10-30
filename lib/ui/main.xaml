@@ -86,6 +86,11 @@
                             <ContextMenu x:Name="SetMenu" Placement="Bottom"/>
                         </Button.ContextMenu>
                     </Button>
+                    <!-- светлая / тёмная тема (выбор запоминается; «Тема как в Windows» — в меню «⋯») -->
+                    <Button x:Name="ThemeBtn" Style="{StaticResource IconButton}" Margin="0,0,4,0" AutomationProperties.Name="Переключить тему"
+                            ToolTip="Переключить тему">
+                        <TextBlock x:Name="ThemeGlyph" Style="{StaticResource Glyph}" Text="&#xE708;" FontSize="14"/>
+                    </Button>
                     <!-- откат, о программе, клавиши -->
                     <Button x:Name="MoreBtn" Style="{StaticResource IconButton}" AutomationProperties.Name="Ещё" ToolTip="Откат изменений, о программе, клавиши (F1)">
                         <TextBlock Style="{StaticResource Glyph}" Text="&#xE712;" FontSize="14"/>

@@ -22,10 +22,18 @@ $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 
 # ---------- оформление ----------
 
-# тема по системе: светлая/тёмная, акцент из DWM (запасной #0067C0), Segoe UI Variable, если есть
+# тема: светлая/тёмная — по выбору в окне (кнопка в шапке, $script:PbThemePref = light | dark, хранится в ui.json)
+# или как в Windows (auto); акцент из DWM (запасной #0067C0), Segoe UI Variable, если есть
+$script:PbThemePref = $null
 function Get-UiTheme {
+    if ($null -eq $script:PbThemePref) {
+        $script:PbThemePref = 'auto'
+        $st = Read-UiState
+        if ($st -and $st.Theme -in 'light', 'dark') { $script:PbThemePref = [string]$st.Theme }
+    }
     $dark = $false
     try { $dark = (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' -ErrorAction Stop) -eq 0 } catch { }
+    if ($script:PbThemePref -eq 'dark') { $dark = $true } elseif ($script:PbThemePref -eq 'light') { $dark = $false }
     $accent = [Windows.Media.Color]::FromRgb(0x00, 0x67, 0xC0)
     try {
         $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF
@@ -484,7 +492,8 @@ function Read-UiState {
 function Save-UiState ($Win, [string]$Nav) {
     try {
         $b = if ($Win.WindowState -eq 'Normal') { New-Object Windows.Rect $Win.Left, $Win.Top, $Win.ActualWidth, $Win.ActualHeight } else { $Win.RestoreBounds }
-        $j = [ordered]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = $Win.WindowState -eq 'Maximized'; Nav = $Nav }
+        $j = [ordered]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = $Win.WindowState -eq 'Maximized'; Nav = $Nav
+                         Theme = $(if ($script:PbThemePref) { $script:PbThemePref } else { 'auto' }) }
         New-Item -ItemType Directory -Path (Split-Path (Get-UiStatePath)) -Force | Out-Null
         [IO.File]::WriteAllText((Get-UiStatePath), ($j | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
     } catch { }
@@ -580,7 +589,7 @@ function Show-SelectionDialog {
     foreach ($n in 'TabInstall', 'TabCapture', 'InstallPane', 'InstallBar', 'CapturePane', 'CaptureHint', 'CaptureList', 'CaptureCard', 'CaptureCardIcon',
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
-        'HeadLeft', 'MoreBtn', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
+        'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
         'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
@@ -2127,14 +2136,19 @@ function Show-SelectionDialog {
     $ctl.MoreBtn.add_Click({
         $m = $ctl.MoreBtn.ContextMenu
         $m.Items.Clear()
-        foreach ($p in @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'))) {
+        $menu = @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'))
+        if ($script:PbThemePref -ne 'auto') { $menu = @(, @('Тема как в Windows', 'theme-auto')) + $menu }
+        foreach ($p in $menu) {
             $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
         }
         $m.PlacementTarget = $ctl.MoreBtn; $m.IsOpen = $true
     })
     $ctl.MoreBtn.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
         param($s, $e)
-        switch ([string]$e.Source.Tag) { 'undo' { Show-UndoDialog $win } 'about' { Show-About } 'keys' { Show-Keys } }
+        switch ([string]$e.Source.Tag) {
+            'undo' { Show-UndoDialog $win } 'about' { Show-About } 'keys' { Show-Keys }
+            'theme-auto' { $script:PbThemePref = 'auto'; Update-Theme }
+        }
     })
 
     # новая версия движка: проверка в фоне (git fetch), установится при следующем запуске (setup.ps1)
@@ -2166,15 +2180,29 @@ function Show-SelectionDialog {
     $themeTimer = New-Object Windows.Threading.DispatcherTimer
     $themeTimer.Interval = [TimeSpan]::FromSeconds(2)
     $ui.ThemeKey = "$($theme.Dark)|$($theme.Accent)|$([Windows.SystemParameters]::HighContrast)"
-    $themeTimer.add_Tick({
+    # тема на лету: смена в Windows (раз в 2 с) или кнопкой в шапке
+    function Update-Theme {
         $t = Get-UiTheme
         $k = "$($t.Dark)|$($t.Accent)|$([Windows.SystemParameters]::HighContrast)"
-        if ($k -eq $ui.ThemeKey) { return }
-        $ui.ThemeKey = $k
-        Set-UiPalette ([Windows.Application]::Current.Resources) $t
-        $icon = New-UiIcon ([Windows.Application]::Current.Resources)
-        $win.Icon = $icon; $ctl.Logo.Source = $icon
-        [PcBase.Native]::SetDarkTitleBar((New-Object Windows.Interop.WindowInteropHelper $win).Handle, [bool]$t.Dark)
+        if ($k -ne $ui.ThemeKey) {
+            $ui.ThemeKey = $k
+            Set-UiPalette ([Windows.Application]::Current.Resources) $t
+            # диалоги берут тему из Initialize-Ui (тёмный заголовок окна) — обновить и её
+            if ($script:PbUiTheme) { $script:PbUiTheme.Dark = $t.Dark; $script:PbUiTheme.Accent = $t.Accent }
+            $icon = New-UiIcon ([Windows.Application]::Current.Resources)
+            $win.Icon = $icon; $ctl.Logo.Source = $icon
+            [PcBase.Native]::SetDarkTitleBar((New-Object Windows.Interop.WindowInteropHelper $win).Handle, [bool]$t.Dark)
+        }
+        # кнопка показывает, на какую тему переключит: в тёмной — солнце, в светлой — луна
+        $ctl.ThemeGlyph.Text = if ($t.Dark) { [string][char]0xE706 } else { [string][char]0xE708 }
+        $to = if ($t.Dark) { 'светлую' } else { 'тёмную' }
+        $ctl.ThemeBtn.ToolTip = "Переключить на $to тему$(if ($script:PbThemePref -eq 'auto') { '. Сейчас — как в Windows' })"
+        [Windows.Automation.AutomationProperties]::SetName($ctl.ThemeBtn, "Переключить на $to тему")
+    }
+    $themeTimer.add_Tick({ Update-Theme })
+    $ctl.ThemeBtn.add_Click({
+        $script:PbThemePref = if ((Get-UiTheme).Dark) { 'light' } else { 'dark' }
+        Update-Theme
     })
 
     # «Показать план» — план в окне; «Применить» — подтверждение и прогон в окне.
@@ -2246,6 +2274,7 @@ function Show-SelectionDialog {
         Start-FilesJob
         Start-StatusJob
         Start-EngineCheck
+        Update-Theme
         $themeTimer.Start()
         if (Initialize-DataLayout) { Start-DataJob 'push' }
         # проверка окна в CI (tests\smoke.ps1): дождаться статусов, пройти по разделам, показать план, закрыть
