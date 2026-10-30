@@ -626,6 +626,34 @@ function Show-SelectionDialog {
         }
     }
 
+    # --- зависимости (Э8): поле Requires каталога. Отметил программу — нужное ей отмечается само (AutoAdded,
+    # с уведомлением); снял нужное — предупреждение; в сохранение пишется только отмеченное пользователем ---
+    $reqMap = @{}
+    foreach ($x in @(@($Apps) + @($Tweaks))) { if ($x.Requires) { $reqMap[$x.Id] = @($x.Requires) } }
+    $depItem = @{}
+    foreach ($it in $items) { if ($it.Kind -in 'app', 'tweak') { $depItem[$it.Id] = $it } }
+    function Get-ReqClosure ([string]$Id) {
+        $seen = @{}; $queue = New-Object System.Collections.Queue
+        foreach ($r in @($reqMap[$Id])) { if ($r) { $queue.Enqueue($r) } }
+        while ($queue.Count) {
+            $r = $queue.Dequeue()
+            if ($seen.ContainsKey($r) -or $r -eq $Id) { continue }
+            $seen[$r] = $true
+            foreach ($n in @($reqMap[$r])) { if ($n) { $queue.Enqueue($n) } }
+        }
+        return @($seen.Keys)
+    }
+    function Get-Dependents ([string]$Id) { @($reqMap.Keys | Where-Object { (Get-ReqClosure $_) -contains $Id } | ForEach-Object { $depItem[$_] } | Where-Object { $_ }) }
+    foreach ($id in @($reqMap.Keys)) {
+        $it = $depItem[$id]; if (-not $it) { continue }
+        $names = @($reqMap[$id] | ForEach-Object { $depItem[$_] } | Where-Object { $_ } | ForEach-Object { $_.Name })
+        if ($names.Count) { $it.Facts.Add((New-Fact 'Требует' (($names -join ', ') + '. Отмечается вместе с этим пунктом.'))) }
+    }
+    foreach ($it in @($depItem.Values)) {
+        $for = @(Get-Dependents $it.Id | ForEach-Object { $_.Name })
+        if ($for.Count) { $it.Facts.Add((New-Fact 'Нужен для' ($for -join ', '))) }
+    }
+
     # файлы: релиз files «Моих данных»; пункты появятся, когда фоновая задача получит список (Start-FilesJob)
     [void](Add-Nav 'header' 'files' 'ФАЙЛЫ')
     $fk = 'files|release'
@@ -668,7 +696,7 @@ function Show-SelectionDialog {
     # -ForSave — для сохранения: всё отмеченное, включая установленные (набор переносится на другие компьютеры)
     function Get-Chosen ([switch]$ForSave) {
         $on = @{}
-        foreach ($it in $items) { if (($ForSave -and $it.IsChecked) -or (-not $ForSave -and $it.IsPicked)) { $on[$it.Key] = $it } }
+        foreach ($it in $items) { if (($ForSave -and $it.IsChecked -and -not $it.AutoAdded) -or (-not $ForSave -and $it.IsPicked)) { $on[$it.Key] = $it } }
         $appIn = { param($A) $o = $on['app:' + $A.Id]; $o -and ($ForSave -or -not $o.IsLocked -or $o.Action -in 'update', 'reinstall') }
         return @{
             Apps     = @($appList | Where-Object { & $appIn $_ } | ForEach-Object { $_.Id })
@@ -808,11 +836,48 @@ function Show-SelectionDialog {
             }
             $it.IsChecked = [bool]$on
             if ($it.HasConfig) { $it.ConfigOn = [bool]$on -and ($Sel.Configs -contains $it.Id) }
+            $it.AutoAdded = $false
         }
+        # зависимости в сохранении не хранятся — достраиваются при загрузке
+        foreach ($it in @($depItem.Values | Where-Object { $_.IsPicked -and $reqMap.ContainsKey($_.Id) })) { Update-Deps $it -Quiet }
         $ui.Bulk = $false
         Update-Counts
         if ($ui.Mode -ne 'cat') { Update-NavHits; Update-View }
         return $miss
+    }
+
+    # зависимости после изменения одного пункта (Э8). Отмечен — нужное ему отмечается (AutoAdded) с уведомлением;
+    # снят — предупреждение, если он нужен отмеченным, и снимаются автоотмеченные, которые больше никому не нужны
+    function Update-Deps ($Changed, [switch]$Quiet) {
+        $ui.InDeps = $true
+        try {
+            if ($Changed.IsPicked) {
+                $added = @()
+                foreach ($d in (Get-ReqClosure $Changed.Id)) {
+                    $di = $depItem[$d]
+                    if ($di -and -not $di.IsChecked) { $di.AutoAdded = $true; $di.IsChecked = $true; $added += $di.Name }
+                }
+                if ($added.Count -and -not $Quiet) {
+                    Show-Notice "Добавлено: $($added -join ', '). $(if ($added.Count -eq 1) { 'Требуется' } else { 'Требуются' }) для «$($Changed.Name)»."
+                }
+            } else {
+                $need = @(Get-Dependents $Changed.Id | Where-Object { $_.IsPicked } | ForEach-Object { $_.Name })
+                if ($need.Count -and -not $Quiet -and $Changed.CanToggle) {
+                    Show-Notice "«$($Changed.Name)» не будет установлен, но он требуется для: $($need -join ', '). Без него $(if ($need.Count -eq 1) { 'программа может работать' } else { 'они могут работать' }) неправильно." 'warn'
+                }
+                foreach ($d in (Get-ReqClosure $Changed.Id)) {
+                    $di = $depItem[$d]
+                    if ($di -and $di.AutoAdded -and $di.IsChecked -and -not @(Get-Dependents $d | Where-Object { $_.IsPicked }).Count) { $di.IsChecked = $false; $di.AutoAdded = $false }
+                }
+            }
+        } finally { $ui.InDeps = $false }
+        Update-NeededBy
+    }
+    function Update-NeededBy {
+        foreach ($it in @($depItem.Values)) {
+            $n = (@(Get-Dependents $it.Id | Where-Object { $_.IsPicked } | ForEach-Object { $_.Name }) -join ', ')
+            if ($it.NeededBy -ne $n) { $it.NeededBy = $n }
+        }
     }
 
     # уведомление над списком: ok — акцентом, warn — красным
@@ -1476,6 +1541,11 @@ function Show-SelectionDialog {
     $onChange = {
         param($s, $e)
         if ($ui.Bulk) { return }
+        if ($e.PropertyName -eq 'IsPicked' -and -not $ui.InDeps -and $s.Kind -in 'app', 'tweak') {
+            # отметил сам — уже не «автоматически»; зависимости пересчитываются
+            if ($s.IsChecked -and $s.CanToggle) { $s.AutoAdded = $false }
+            Update-Deps $s
+        }
         if ($e.PropertyName -in 'IsChecked', 'ConfigOn', 'IsPicked') { Update-Counts }
     }
     foreach ($it in $items) { $it.add_PropertyChanged($onChange) }
@@ -1672,7 +1742,9 @@ function Show-SelectionDialog {
                 $st = $s.Apps[$it.Id]
                 if ($it.StatusKind -ne $st.Kind -or $it.StatusText -ne $st.Text) { $it.StatusKind = $st.Kind; $it.StatusText = $st.Text }
                 # Э7: установленная — отмечена и заблокирована; не установлена — снова свободна; unknown — как было
+                $ui.InDeps = $true   # блокировка по статусу — не действие пользователя: зависимости не трогаются
                 if ($st.Kind -in 'installed', 'update') { $it.IsLocked = $true } elseif ($st.Kind -eq 'missing') { $it.IsLocked = $false }
+                $ui.InDeps = $false
                 if ($st.Icon -and -not $it.IconSource -and -not $ui.IconTried[$it.Id]) { $ui.IconTried[$it.Id] = $true; $it.IconSource = Get-ExeIcon $st.Icon }
             }
             $ui.Status.Apps = $s.Apps
@@ -1688,6 +1760,7 @@ function Show-SelectionDialog {
         $up = @($items | Where-Object { $_.Kind -eq 'app' -and $_.StatusKind -eq 'update' }).Count
         $ctl.MarkUpdates.Content = "Отметить обновления ($up)"
         $ctl.MarkUpdates.Visibility = if ($up) { 'Visible' } else { 'Collapsed' }
+        Update-NeededBy
     }
 
     function Start-StatusJob {

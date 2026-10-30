@@ -65,6 +65,16 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
         [void]$plan.Add($s)
     }
     foreach ($t in $post) { [void]$plan.Add((New-PbTweakStep 6 $t $Status)) }
+    # зависимости (Э8): нужное не отмечено и не установлено — пометка у шага (снять его в окне можно, с предупреждением)
+    $all = @{}; foreach ($x in @(@($Apps) + @($Tweaks))) { if ($x.Id) { $all[$x.Id] = $x } }
+    $chosen = @{}; foreach ($id in @(@($Sel.Apps) + @($Sel.Tweaks))) { if ($id) { $chosen[$id] = $true } }
+    foreach ($s in @($plan | Where-Object { $_.Kind -in 'app', 'tweak' })) {
+        $miss = @(@($all[$s.Ref].Requires) | Where-Object { $_ -and -not $chosen[$_] } | Where-Object {
+            $r = $_
+            -not ($Status -and (($Status.Apps -and $Status.Apps[$r] -and $Status.Apps[$r].Kind -in 'installed', 'update') -or ($Status.Tweaks -and $Status.Tweaks[$r] -eq 'applied')))
+        } | ForEach-Object { if ($all[$_]) { $all[$_].Name } else { $_ } })
+        if ($miss.Count) { $s.Note = (@($s.Note, "требует: $($miss -join ', ') (не отмечено)") | Where-Object { $_ }) -join '; ' }
+    }
     if ($Sel.Name -and $Sel.Name -ne $env:COMPUTERNAME) {
         $s = New-PbStep 7 'rename' 'rename' "Имя компьютера: $env:COMPUTERNAME → $($Sel.Name)" $Sel.Name
         $s.Note = 'вступит в силу после перезагрузки'

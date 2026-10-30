@@ -37,6 +37,15 @@ Report 'твики: Apply, Os, Phase' (@($Tweaks | ForEach-Object {
     if (-not $_.Os -or @($_.Os | Where-Object { $_ -notin '10', '11' }).Count) { "$($_.Id): Os" }
     if ($_.Phase -notin 'pre', 'post') { "$($_.Id): Phase" } }))
 
+# зависимости (Requires): только существующие id, без циклов
+$ids = @{}; foreach ($x in @(@($a) + @($Tweaks))) { $ids[$x.Id] = @($x.Requires | Where-Object { $_ }) }
+$bad = foreach ($k in $ids.Keys) {
+    foreach ($r in $ids[$k]) { if (-not $ids.ContainsKey($r)) { "${k}: Requires '$r' — нет такого id" } }
+    $seen = @{}; $stack = New-Object System.Collections.Stack; foreach ($r in $ids[$k]) { $stack.Push($r) }
+    while ($stack.Count) { $r = $stack.Pop(); if ($r -eq $k) { "${k}: циклическая зависимость"; break }; if ($seen[$r]) { continue }; $seen[$r] = $true; foreach ($n in @($ids[$r])) { $stack.Push($n) } }
+}
+Report 'каталог: зависимости (Requires) существуют, без циклов' $bad
+
 # тон текстов программы
 $tone = '(?<!\p{L})(ты|твой|твоя|твоё|твои|твоих|твоим|твоей|тебе|тебя|снести|снесёт|сносит|снос|репа|репы|репу|репе|бесплатно)(?!\p{L})'
 $bad = foreach ($f in $files | Where-Object { $_ -match '\.(ps1|psd1|xaml|cs)$' -and $_ -ne 'tests/ci.ps1' }) {
