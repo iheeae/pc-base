@@ -84,6 +84,18 @@ $bad = foreach ($f in $files | Where-Object { $_ -ne 'tests/ci.ps1' -and $_ -not
 }
 Report 'личное' $bad
 
+# XAML: у элемента стиль задан и атрибутом Style, и вложенным <X.Style> — шаблон падает при первой отрисовке
+# (так падал план в Э5), а загрузка окна это не ловит
+$bad = foreach ($f in $files | Where-Object { $_ -match '\.xaml$' }) {
+    $x = New-Object Xml.XmlDocument; $x.Load((Join-Path $root $f))
+    foreach ($el in $x.SelectNodes('//*')) {
+        if ($el.HasAttribute('Style') -and @($el.ChildNodes | Where-Object { $_.LocalName -eq "$($el.LocalName).Style" }).Count) {
+            "${f}: <$($el.LocalName)> $($el.GetAttribute('Text')) — Style и атрибутом, и вложенным элементом"
+        }
+    }
+}
+Report 'XAML: стиль задан один раз' $bad
+
 # README соответствует каталогу
 & (Join-Path $root 'tools\catalog-doc.ps1') -Check *> $null
 Report 'README: раздел каталога соответствует каталогу' $(if ($LASTEXITCODE -ne 0) { 'запустите tools\catalog-doc.ps1' })

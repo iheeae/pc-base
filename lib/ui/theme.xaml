@@ -405,7 +405,6 @@
                                 <ColumnDefinition Width="32"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <CheckBox x:Name="Check" Focusable="False" IsChecked="{Binding IsChecked, Mode=TwoWay}" IsEnabled="{Binding CanToggle}"
                                       HorizontalAlignment="Center" ToolTip="Отметить (пробел)" ToolTipService.ShowOnDisabled="True"/>
@@ -420,50 +419,51 @@
                                     <Image Source="{Binding IconSource}" Width="24" Height="24" RenderOptions.BitmapScalingMode="HighQuality"/>
                                 </Border>
                             </Grid>
-                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,8,16,8">
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,8,8,8">
                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                                 <!-- до двух строк, дальше многоточие; полный текст — справа -->
                                 <TextBlock Text="{Binding Desc}" Style="{StaticResource Caption}" Margin="0,2,0,0"
                                            TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
                                            LineHeight="16" LineStackingStrategy="BlockLineHeight" MaxHeight="32"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Style="{StaticResource ConfigBadge}" Tag="cfg" AutomationProperties.Name="С моими настройками"
+                                <!-- пометки — отдельной строкой с переносом: название и описание получают всю ширину карточки -->
+                                <WrapPanel Margin="0,2,0,0">
+                                <Button Style="{StaticResource ConfigBadge}" Margin="0,4,6,0" Tag="cfg" AutomationProperties.Name="С моими настройками"
                                         Visibility="{Binding HasConfig, Converter={StaticResource Vis}}"/>
-                                <Border Style="{StaticResource Pill}" Visibility="{Binding Interactive, Converter={StaticResource Vis}}"
+                                <Border Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding Interactive, Converter={StaticResource Vis}}"
                                         ToolTip="Тихая установка невозможна: откроется мастер установки">
                                     <TextBlock Text="мастер" VerticalAlignment="Center"/>
                                 </Border>
-                                <Border Style="{StaticResource DangerPill}" Visibility="{Binding Irreversible, Converter={StaticResource Vis}}"
+                                <Border Style="{StaticResource DangerPill}" Margin="0,4,6,0" Visibility="{Binding Irreversible, Converter={StaticResource Vis}}"
                                         ToolTip="Не отменяется через undo.ps1, только точкой восстановления">
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
                                 </Border>
                                 <!-- зависимость (Э8): отмечена, потому что нужна другой отмеченной программе -->
-                                <Border Style="{StaticResource Pill}" Visibility="{Binding HasNeededBy, Converter={StaticResource Vis}}"
+                                <Border Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding HasNeededBy, Converter={StaticResource Vis}}"
                                         ToolTip="Требуется для отмеченной программы">
                                     <TextBlock Text="{Binding NeededByText}" VerticalAlignment="Center"/>
                                 </Border>
                                 <!-- действие над установленной (Э7): будет обновлена / переустановка / будет удалена -->
-                                <Border x:Name="ActionPill" Style="{StaticResource Pill}" Visibility="{Binding HasAction, Converter={StaticResource Vis}}"
+                                <Border x:Name="ActionPill" Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding HasAction, Converter={StaticResource Vis}}"
                                         Background="{DynamicResource AccentSoft}">
                                     <TextBlock x:Name="ActionText" Text="{Binding ActionText}" VerticalAlignment="Center" Foreground="{DynamicResource AccentText}"/>
                                 </Border>
                                 <!-- статус на этом компьютере: установлено / обновление / не установлено; у твиков — применено -->
-                                <Border x:Name="StatusPill" Style="{StaticResource Pill}" Visibility="{Binding HasStatus, Converter={StaticResource Vis}}">
+                                <Border x:Name="StatusPill" Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding HasStatus, Converter={StaticResource Vis}}">
                                     <TextBlock x:Name="StatusText" Text="{Binding StatusText}" VerticalAlignment="Center"/>
                                 </Border>
-                                <Border Style="{StaticResource Pill}" Visibility="{Binding IsMine, Converter={StaticResource Vis}}"
+                                <Border Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding IsMine, Converter={StaticResource Vis}}"
                                         ToolTip="Программа из собственного каталога («Мои данные»)">
                                     <TextBlock Text="мой каталог" VerticalAlignment="Center"/>
                                 </Border>
-                                <Border Style="{StaticResource Pill}" Visibility="{Binding OpenSource, Converter={StaticResource Vis}}"
+                                <Border Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding OpenSource, Converter={StaticResource Vis}}"
                                         ToolTip="Открытый исходный код">
                                     <TextBlock Text="Open source" VerticalAlignment="Center"/>
                                 </Border>
-                                <Border Style="{StaticResource Pill}" Visibility="{Binding IsWeb, Converter={StaticResource Vis}}"
+                                <Border Style="{StaticResource Pill}" Margin="0,4,6,0" Visibility="{Binding IsWeb, Converter={StaticResource Vis}}"
                                         ToolTip="Загружается с официального сайта с проверкой цифровой подписи">
                                     <TextBlock Text="сайт" VerticalAlignment="Center"/>
                                 </Border>
+                            </WrapPanel>
                             </StackPanel>
                         </Grid>
                     </Border>

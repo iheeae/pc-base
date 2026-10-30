@@ -20,6 +20,11 @@ function Get-PbSplashXaml {
     } else {
         $dark = $false
         try { $dark = (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' -ErrorAction Stop) -eq 0 } catch { }
+        # тема, выбранная в окне кнопкой в шапке (ui.json), важнее темы Windows
+        try {
+            $pref = [string]((Get-Content (Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json).Theme)
+            if ($pref -eq 'dark') { $dark = $true } elseif ($pref -eq 'light') { $dark = $false }
+        } catch { }
         $r = 0x00; $g = 0x67; $b = 0xC0
         try {
             $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF

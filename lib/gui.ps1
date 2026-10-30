@@ -22,10 +22,18 @@ $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 
 # ---------- оформление ----------
 
-# тема по системе: светлая/тёмная, акцент из DWM (запасной #0067C0), Segoe UI Variable, если есть
+# тема: светлая/тёмная — по выбору в окне (кнопка в шапке, $script:PbThemePref = light | dark, хранится в ui.json)
+# или как в Windows (auto); акцент из DWM (запасной #0067C0), Segoe UI Variable, если есть
+$script:PbThemePref = $null
 function Get-UiTheme {
+    if ($null -eq $script:PbThemePref) {
+        $script:PbThemePref = 'auto'
+        $st = Read-UiState
+        if ($st -and $st.Theme -in 'light', 'dark') { $script:PbThemePref = [string]$st.Theme }
+    }
     $dark = $false
     try { $dark = (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' -ErrorAction Stop) -eq 0 } catch { }
+    if ($script:PbThemePref -eq 'dark') { $dark = $true } elseif ($script:PbThemePref -eq 'light') { $dark = $false }
     $accent = [Windows.Media.Color]::FromRgb(0x00, 0x67, 0xC0)
     try {
         $v = [int64](Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\DWM' 'AccentColor' -ErrorAction Stop) -band 0xFFFFFFFF
@@ -479,12 +487,15 @@ function Set-UiBackdrop ($Win) {
 # размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
 function Get-UiStatePath { Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json' }
 function Read-UiState {
-    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
+    $p = Get-UiStatePath
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { return (Get-Content $p -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
 }
 function Save-UiState ($Win, [string]$Nav) {
     try {
         $b = if ($Win.WindowState -eq 'Normal') { New-Object Windows.Rect $Win.Left, $Win.Top, $Win.ActualWidth, $Win.ActualHeight } else { $Win.RestoreBounds }
-        $j = [ordered]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = $Win.WindowState -eq 'Maximized'; Nav = $Nav }
+        $j = [ordered]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = $Win.WindowState -eq 'Maximized'; Nav = $Nav
+                         Theme = $(if ($script:PbThemePref) { $script:PbThemePref } else { 'auto' }) }
         New-Item -ItemType Directory -Path (Split-Path (Get-UiStatePath)) -Force | Out-Null
         [IO.File]::WriteAllText((Get-UiStatePath), ($j | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
     } catch { }
@@ -580,7 +591,7 @@ function Show-SelectionDialog {
     foreach ($n in 'TabInstall', 'TabCapture', 'InstallPane', 'InstallBar', 'CapturePane', 'CaptureHint', 'CaptureList', 'CaptureCard', 'CaptureCardIcon',
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
-        'HeadLeft', 'MoreBtn', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
+        'HeadLeft', 'MoreBtn', 'ThemeBtn', 'ThemeGlyph', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
         'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
         'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
@@ -815,6 +826,7 @@ function Show-SelectionDialog {
         }
         $ctl.ListEmpty.Visibility = if ($n -or $card) { 'Collapsed' } else { 'Visible' }
         $ctl.FilesCard.Visibility = if ($card) { 'Visible' } else { 'Collapsed' }
+        $ctl.List.Visibility = if ($card) { 'Collapsed' } else { 'Visible' }   # карточка «Файлов» вместо списка, а не поверх
         if ($n) { $ctl.List.ScrollIntoView($view.GetItemAt(0)) }
     }
 
@@ -1226,7 +1238,8 @@ function Show-SelectionDialog {
             [void]$items.Remove($it)
         }
         $ui.Bulk = $true
-        foreach ($f in @($List)) {
+        # @($null) в 5.1 — массив из одного элемента: без фильтра появлялся пустой файл «0 Б», пока «Мои данные» не подключены
+        foreach ($f in @($List | Where-Object { $_ })) {
             $it = New-FileItem $f $fk $fileGroup
             $it.IsChecked = ($want -contains $f.Name -or $want -contains $f.Title)
             $it.add_PropertyChanged($onChange)
@@ -2127,14 +2140,19 @@ function Show-SelectionDialog {
     $ctl.MoreBtn.add_Click({
         $m = $ctl.MoreBtn.ContextMenu
         $m.Items.Clear()
-        foreach ($p in @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'))) {
+        $menu = @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'))
+        if ($script:PbThemePref -ne 'auto') { $menu = @(, @('Тема как в Windows', 'theme-auto')) + $menu }
+        foreach ($p in $menu) {
             $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
         }
         $m.PlacementTarget = $ctl.MoreBtn; $m.IsOpen = $true
     })
     $ctl.MoreBtn.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
         param($s, $e)
-        switch ([string]$e.Source.Tag) { 'undo' { Show-UndoDialog $win } 'about' { Show-About } 'keys' { Show-Keys } }
+        switch ([string]$e.Source.Tag) {
+            'undo' { Show-UndoDialog $win } 'about' { Show-About } 'keys' { Show-Keys }
+            'theme-auto' { $script:PbThemePref = 'auto'; Update-Theme }
+        }
     })
 
     # новая версия движка: проверка в фоне (git fetch), установится при следующем запуске (setup.ps1)
@@ -2166,15 +2184,29 @@ function Show-SelectionDialog {
     $themeTimer = New-Object Windows.Threading.DispatcherTimer
     $themeTimer.Interval = [TimeSpan]::FromSeconds(2)
     $ui.ThemeKey = "$($theme.Dark)|$($theme.Accent)|$([Windows.SystemParameters]::HighContrast)"
-    $themeTimer.add_Tick({
+    # тема на лету: смена в Windows (раз в 2 с) или кнопкой в шапке
+    function Update-Theme {
         $t = Get-UiTheme
         $k = "$($t.Dark)|$($t.Accent)|$([Windows.SystemParameters]::HighContrast)"
-        if ($k -eq $ui.ThemeKey) { return }
-        $ui.ThemeKey = $k
-        Set-UiPalette ([Windows.Application]::Current.Resources) $t
-        $icon = New-UiIcon ([Windows.Application]::Current.Resources)
-        $win.Icon = $icon; $ctl.Logo.Source = $icon
-        [PcBase.Native]::SetDarkTitleBar((New-Object Windows.Interop.WindowInteropHelper $win).Handle, [bool]$t.Dark)
+        if ($k -ne $ui.ThemeKey) {
+            $ui.ThemeKey = $k
+            Set-UiPalette ([Windows.Application]::Current.Resources) $t
+            # диалоги берут тему из Initialize-Ui (тёмный заголовок окна) — обновить и её
+            if ($script:PbUiTheme) { $script:PbUiTheme.Dark = $t.Dark; $script:PbUiTheme.Accent = $t.Accent }
+            $icon = New-UiIcon ([Windows.Application]::Current.Resources)
+            $win.Icon = $icon; $ctl.Logo.Source = $icon
+            [PcBase.Native]::SetDarkTitleBar((New-Object Windows.Interop.WindowInteropHelper $win).Handle, [bool]$t.Dark)
+        }
+        # кнопка показывает, на какую тему переключит: в тёмной — солнце, в светлой — луна
+        $ctl.ThemeGlyph.Text = if ($t.Dark) { [string][char]0xE706 } else { [string][char]0xE708 }
+        $to = if ($t.Dark) { 'светлую' } else { 'тёмную' }
+        $ctl.ThemeBtn.ToolTip = "Переключить на $to тему$(if ($script:PbThemePref -eq 'auto') { '. Сейчас — как в Windows' })"
+        [Windows.Automation.AutomationProperties]::SetName($ctl.ThemeBtn, "Переключить на $to тему")
+    }
+    $themeTimer.add_Tick({ Update-Theme })
+    $ctl.ThemeBtn.add_Click({
+        $script:PbThemePref = if ((Get-UiTheme).Dark) { 'light' } else { 'dark' }
+        Update-Theme
     })
 
     # «Показать план» — план в окне; «Применить» — подтверждение и прогон в окне.
@@ -2246,33 +2278,51 @@ function Show-SelectionDialog {
         Start-FilesJob
         Start-StatusJob
         Start-EngineCheck
+        Update-Theme
         $themeTimer.Start()
         if (Initialize-DataLayout) { Start-DataJob 'push' }
         # проверка окна в CI (tests\smoke.ps1): дождаться статусов, пройти по разделам, показать план, закрыть
         if ($env:TR_SMOKE) {
             $ui.SmokeStart = Get-Date
-            $smoke = New-Object Windows.Threading.DispatcherTimer
-            $smoke.Interval = [TimeSpan]::FromSeconds(1)
-            $smoke.add_Tick({
-                $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
-                $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
-                if ($busy -and $sec -lt 240) { return }
-                if (-not $ui.SmokeDone) {
-                    $ui.SmokeDone = $true
-                    Write-Host "  smoke: статусы готовы через $([int]$sec) с"
-                    foreach ($n in @($nav | Where-Object { $_.Kind -eq 'cat' })) { Select-Nav $n }
-                    $first = @($items | Where-Object { $_.Kind -eq 'app' } | Select-Object -First 1)
-                    if ($first) { $ctl.List.SelectedItem = $first[0] }
-                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
-                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
-                    $c = Get-RunChoice
-                    if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
-                    return
+            # таймер — в $ui: обработчик Tick выполняется позже, когда переменных этого обработчика уже нет
+            $ui.SmokeTimer = New-Object Windows.Threading.DispatcherTimer
+            $ui.SmokeTimer.Interval = [TimeSpan]::FromSeconds(1)
+            $ui.SmokeTimer.add_Tick({
+                try {
+                    $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
+                    $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
+                    if (-not $ui.SmokeDone) { $env:TR_SMOKE_STEP = "ожидание статусов, $([int]$sec) с" }
+                    if ($busy -and $sec -lt 120) { return }
+                    if (-not $ui.SmokeDone) {
+                        $ui.SmokeDone = $true
+                        Write-Host "  smoke: статусы готовы через $([int]$sec) с"
+                        $env:TR_SMOKE_STEP = 'разделы'
+                        foreach ($n in @($nav | Where-Object { $_.Kind -eq 'cat' })) { $env:TR_SMOKE_STEP = "раздел $($n.Name)"; Select-Nav $n }
+                        $env:TR_SMOKE_STEP = 'подробности'
+                        $first = @($items | Where-Object { $_.Kind -eq 'app' } | Select-Object -First 1)
+                        if ($first) { $ctl.List.SelectedItem = $first[0] }
+                        $env:TR_SMOKE_STEP = 'отметки'
+                        foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
+                        foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
+                        $env:TR_SMOKE_STEP = 'тема'
+                        $ctl.ThemeBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
+                        $ctl.ThemeBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent)))
+                        $env:TR_SMOKE_STEP = 'план'
+                        $c = Get-RunChoice
+                        if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                        $env:TR_SMOKE_STEP = 'план показан'
+                        return
+                    }
+                    $ui.SmokeTimer.Stop()
+                    $env:TR_SMOKE_STEP = 'закрытие'
+                    $win.Close()
+                } catch {
+                    $env:TR_SMOKE_STEP = "ошибка на шаге «$env:TR_SMOKE_STEP»: $($_.Exception.Message) @ строка $($_.InvocationInfo.ScriptLineNumber)"
+                    $ui.SmokeTimer.Stop()
+                    $win.Close()
                 }
-                $smoke.Stop()
-                $win.Close()
             })
-            $smoke.Start()
+            $ui.SmokeTimer.Start()
         }
     })
 
