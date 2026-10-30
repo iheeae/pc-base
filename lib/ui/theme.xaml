@@ -37,6 +37,13 @@
         <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="TextWrapping" Value="Wrap"/>
     </Style>
+    <!-- шкала Fluent: заголовок экрана 28, подзаголовок 20 (Title), основной 14, подписи 12 (Caption) -->
+    <Style x:Key="PageTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="28"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="TextWrapping" Value="NoWrap"/>
+        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    </Style>
     <Style x:Key="Glyph" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Icons}"/>
         <Setter Property="FontSize" Value="16"/>
@@ -357,6 +364,23 @@
         </Setter>
     </Style>
 
+    <!-- тонкая полоса прогресса прогона: дорожка и заливка акцентом -->
+    <Style TargetType="ProgressBar">
+        <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+        <Setter Property="Background" Value="{DynamicResource PillBg}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Grid>
+                        <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="2"/>
+                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="2" HorizontalAlignment="Left"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ===== списки ===== -->
     <Style TargetType="ListBox">
         <Setter Property="Background" Value="Transparent"/>
@@ -379,19 +403,31 @@
                         <Grid Margin="8,0,12,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="32"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <CheckBox Focusable="False" IsChecked="{Binding IsChecked, Mode=TwoWay}" HorizontalAlignment="Center"
                                       ToolTip="Отметить (пробел)"/>
-                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,8,16,8">
+                            <!-- плитка программы: значок из exe, если установлена, иначе монограмма -->
+                            <Grid Grid.Column="1" Width="32" Height="32" Margin="4,0,4,0" VerticalAlignment="Center"
+                                  Visibility="{Binding HasTile, Converter={StaticResource Vis}}">
+                                <Border CornerRadius="6" Background="{Binding MonoBrush}">
+                                    <TextBlock Text="{Binding Monogram}" Foreground="White" FontWeight="SemiBold" FontSize="15"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <Border CornerRadius="6" Background="{DynamicResource Surface}" Visibility="{Binding HasIcon, Converter={StaticResource Vis}}">
+                                    <Image Source="{Binding IconSource}" Width="24" Height="24" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                </Border>
+                            </Grid>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,8,16,8">
                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                                 <!-- до двух строк, дальше многоточие; полный текст — справа -->
                                 <TextBlock Text="{Binding Desc}" Style="{StaticResource Caption}" Margin="0,2,0,0"
                                            TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
                                            LineHeight="16" LineStackingStrategy="BlockLineHeight" MaxHeight="32"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Style="{StaticResource ConfigBadge}" Tag="cfg" AutomationProperties.Name="С моими настройками"
                                         Visibility="{Binding HasConfig, Converter={StaticResource Vis}}"/>
                                 <Border Style="{StaticResource Pill}" Visibility="{Binding Interactive, Converter={StaticResource Vis}}"
@@ -401,6 +437,10 @@
                                 <Border Style="{StaticResource DangerPill}" Visibility="{Binding Irreversible, Converter={StaticResource Vis}}"
                                         ToolTip="Не отменяется через undo.ps1, только точкой восстановления">
                                     <TextBlock Text="необратимо" VerticalAlignment="Center"/>
+                                </Border>
+                                <!-- статус на этом компьютере: установлено / обновление / не установлено; у твиков — применено -->
+                                <Border x:Name="StatusPill" Style="{StaticResource Pill}" Visibility="{Binding HasStatus, Converter={StaticResource Vis}}">
+                                    <TextBlock x:Name="StatusText" Text="{Binding StatusText}" VerticalAlignment="Center"/>
                                 </Border>
                                 <Border Style="{StaticResource Pill}" Visibility="{Binding IsMine, Converter={StaticResource Vis}}"
                                         ToolTip="Программа из собственного каталога («Мои данные»)">
@@ -418,8 +458,24 @@
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding StatusKind}" Value="update">
+                            <Setter TargetName="StatusPill" Property="Background" Value="{DynamicResource AccentSoft}"/>
+                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding StatusKind}" Value="installed">
+                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource TextMuted}"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding StatusKind}" Value="applied">
+                            <Setter TargetName="StatusText" Property="Foreground" Value="{DynamicResource TextMuted}"/>
+                        </DataTrigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Card" Property="Background" Value="{DynamicResource SurfaceHover}"/>
+                            <!-- лёгкий подъём при наведении -->
+                            <Setter TargetName="Card" Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect BlurRadius="8" ShadowDepth="1" Direction="270" Opacity="0.12"/>
+                                </Setter.Value>
+                            </Setter>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="Card" Property="Background" Value="{DynamicResource AccentSoft}"/>
@@ -436,19 +492,27 @@
         <Grid x:Name="Root" Height="32" Background="Transparent" Margin="0,0,0,2">
             <Border x:Name="Bg" CornerRadius="6" Background="Transparent"/>
             <Border x:Name="Pip" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource AccentText}" Visibility="Collapsed"/>
-            <Grid Margin="16,0,12,0">
+            <Grid Margin="12,0,8,0">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="28"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="N" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Text}"/>
-                <TextBlock x:Name="Cnt" Grid.Column="1" Text="{Binding CountText}" VerticalAlignment="Center" Margin="8,0,0,0"
-                           FontSize="12" Foreground="{DynamicResource TextMuted}"/>
+                <TextBlock x:Name="Ic" Style="{StaticResource Glyph}" Text="{Binding Icon}" FontSize="14" Foreground="{DynamicResource TextMuted}"/>
+                <TextBlock x:Name="N" Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Text}"/>
+                <!-- счётчик — пилюлей; полностью выбранная категория — акцентом -->
+                <Border x:Name="CntBg" Grid.Column="2" CornerRadius="9" Padding="7,1" Margin="8,0,0,0" VerticalAlignment="Center" Background="{DynamicResource PillBg}">
+                    <TextBlock x:Name="Cnt" Text="{Binding CountText}" FontSize="12" Foreground="{DynamicResource TextMuted}"/>
+                </Border>
             </Grid>
         </Grid>
         <ControlTemplate.Triggers>
+            <DataTrigger Binding="{Binding CountText}" Value="">
+                <Setter TargetName="CntBg" Property="Visibility" Value="Collapsed"/>
+            </DataTrigger>
             <DataTrigger Binding="{Binding IsFull}" Value="True">
-                <Setter TargetName="Cnt" Property="Foreground" Value="{DynamicResource AccentText}"/>
+                <Setter TargetName="CntBg" Property="Background" Value="{DynamicResource Accent}"/>
+                <Setter TargetName="Cnt" Property="Foreground" Value="{DynamicResource AccentFg}"/>
                 <Setter TargetName="Cnt" Property="FontWeight" Value="SemiBold"/>
             </DataTrigger>
             <DataTrigger Binding="{Binding IsHit}" Value="True">
@@ -465,6 +529,7 @@
             <Trigger Property="IsSelected" Value="True">
                 <Setter TargetName="Bg" Property="Background" Value="{DynamicResource SurfaceStrong}"/>
                 <Setter TargetName="Pip" Property="Visibility" Value="Visible"/>
+                <Setter TargetName="Ic" Property="Foreground" Value="{DynamicResource AccentText}"/>
             </Trigger>
         </ControlTemplate.Triggers>
     </ControlTemplate>

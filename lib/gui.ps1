@@ -17,6 +17,8 @@ $script:PbUiDir = Join-Path $PSScriptRoot 'ui'
 . (Join-Path $PSScriptRoot 'data.ps1')
 . (Join-Path $PSScriptRoot 'files.ps1')
 . (Join-Path $PSScriptRoot 'catalog.ps1')
+. (Join-Path $PSScriptRoot 'status.ps1')
+. (Join-Path $PSScriptRoot 'run.ps1')
 
 # ---------- оформление ----------
 
@@ -50,6 +52,18 @@ function Set-UiPalette ($Res, $Theme) {
 
     $white = [Windows.Media.Colors]::White; $black = [Windows.Media.Colors]::Black
     $a = $Theme.Accent
+    # высокая контрастность: только системные цвета, свои не подмешиваются
+    if ([Windows.SystemParameters]::HighContrast) {
+        $sc = [Windows.SystemColors]
+        $map = @{ Bg = $sc::WindowColor; Surface = $sc::WindowColor; SurfaceHover = $sc::WindowColor; SurfaceStrong = $sc::HighlightColor; NavHover = $sc::WindowColor
+                  Border = $sc::WindowTextColor; Control = $sc::ControlColor; ControlHover = $sc::ControlColor; ControlPressed = $sc::ControlColor
+                  ControlBorder = $sc::WindowTextColor; ControlStrong = $sc::WindowTextColor; Text = $sc::WindowTextColor; TextMuted = $sc::GrayTextColor
+                  PillBg = $sc::WindowColor; Danger = $sc::HotTrackColor; DangerSoft = $sc::WindowColor; ScrollThumb = $sc::ControlDarkColor
+                  Accent = $sc::HighlightColor; AccentFg = $sc::HighlightTextColor; AccentText = $sc::HotTrackColor; AccentSoft = $sc::WindowColor; Focus = $sc::WindowTextColor }
+        foreach ($k in $map.Keys) { $b = New-Object Windows.Media.SolidColorBrush $map[$k]; $b.Freeze(); $Res[$k] = $b.PSObject.BaseObject }
+        $Res['UiFont'] = (New-Object Windows.Media.FontFamily $Theme.Font).PSObject.BaseObject
+        return
+    }
     if ($Theme.Dark) {
         $p = @{ Bg = '#202020'; Surface = '#2B2B2B'; SurfaceHover = '#323232'; SurfaceStrong = '#383838'; NavHover = '#2D2D2D'
                 Border = '#383838'; Control = '#2D2D2D'; ControlHover = '#353535'; ControlPressed = '#282828'; ControlBorder = '#454545'
@@ -208,6 +222,36 @@ function New-Fact ([string]$Label, [string]$Value, [string]$Tone = '') {
     return $f
 }
 
+# значки категорий слева (Segoe Fluent Icons / MDL2); неизвестная категория — общий значок
+$script:PbCatIcons = @{
+    'Основа' = [char]0xE80F; 'Повседневное' = [char]0xE8F1; 'Разработка' = [char]0xE943; 'Сеть и ИБ' = [char]0xE968; 'Система' = [char]0xE770
+    'Игры' = [char]0xE7FC; 'Мой каталог' = [char]0xE734; 'Приватность' = [char]0xE72E; 'Проводник' = [char]0xE8B7; 'Панель задач' = [char]0xE7C4
+    'Пуск' = [char]0xE8FC; 'Мусор' = [char]0xE74D; 'Среда' = [char]0xE756; 'Мои файлы' = [char]0xE8B7
+}
+function Get-CatIcon ([string]$Name) { if ($script:PbCatIcons.ContainsKey($Name)) { [string]$script:PbCatIcons[$Name] } else { [string][char]0xE9CE } }
+
+# спокойная палитра плиток-монограмм: цвет выбирается по Id и от запуска к запуску не меняется
+$script:PbMonoColors = @('#5B6C8F', '#6A7F5B', '#8F6A5B', '#5B8A8F', '#7A5B8F', '#8F7F5B', '#5B7A8F', '#8F5B6E', '#6E8F5B', '#5B5F8F')
+function Get-MonoBrush ([string]$Id) {
+    $h = 0; foreach ($c in $Id.ToCharArray()) { $h = ($h * 31 + [int]$c) % 1000003 }
+    $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($script:PbMonoColors[$h % $script:PbMonoColors.Count]))
+    $b.Freeze(); return $b.PSObject.BaseObject
+}
+
+# значок установленной программы из её exe (путь — DisplayIcon в реестре Uninstall); не вышло — $null, остаётся монограмма
+function Get-ExeIcon ([string]$Path) {
+    try {
+        $p = ($Path -replace ',\s*-?\d+$', '').Trim('"', ' ')
+        if (-not $p -or -not (Test-Path -LiteralPath $p) -or $p -notmatch '\.(exe|ico|dll)$') { return $null }
+        Add-Type -AssemblyName System.Drawing
+        $ico = [Drawing.Icon]::ExtractAssociatedIcon($p)
+        if (-not $ico) { return $null }
+        $src = [Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon($ico.Handle, [Windows.Int32Rect]::Empty, [Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+        $src.Freeze(); $ico.Dispose()
+        return $src
+    } catch { return $null }
+}
+
 # программа каталога (встроенного или собственного) → пункт окна
 function New-AppItem ($A, [string]$CatKey, [string]$Cat) {
     $it = New-Object PcBase.Item
@@ -215,6 +259,7 @@ function New-AppItem ($A, [string]$CatKey, [string]$Cat) {
     $it.Desc = $A.Desc; $it.FullDesc = $A.Desc
     $it.CatKey = $CatKey; $it.CatName = "Программы · $Cat"; $it.GroupTitle = $it.CatName
     $it.Interactive = [bool]$A.Interactive; $it.IsWeb = $A.Source -eq 'web'; $it.OpenSource = [bool]$A.OpenSource; $it.IsMine = [bool]$A.Mine
+    $it.HasTile = $true; $it.Monogram = ([string]$A.Name).Substring(0, 1).ToUpper(); $it.MonoBrush = Get-MonoBrush $A.Id
     if ($A.Config -and $A.Config.Import) {
         $it.HasConfig = $true; $it.ConfigName = 'с моими настройками'; $it.ConfigFile = $A.Config.File
         $it.ConfigDesc = "Переносится: $($A.Config.Desc)$(if ($A.Config.Skip) { " Не переносится: $($A.Config.Skip)" })"
@@ -363,6 +408,120 @@ function Show-AddAppDialog {
     return $st.Result
 }
 
+# ---------- анимации, фон окна, запоминание окна ----------
+
+# смена категории: появление и сдвиг на 8 px за 180 мс; выключено, если в Windows отключены анимации
+function Invoke-UiFade ($El) {
+    if (-not [Windows.SystemParameters]::ClientAreaAnimation) { return }
+    $d = New-Object Windows.Duration ([TimeSpan]::FromMilliseconds(180))
+    $ease = New-Object Windows.Media.Animation.CubicEase; $ease.EasingMode = 'EaseOut'
+    $op = New-Object Windows.Media.Animation.DoubleAnimation 0, 1, $d
+    $tt = New-Object Windows.Media.TranslateTransform
+    $El.RenderTransform = $tt
+    $mv = New-Object Windows.Media.Animation.DoubleAnimation 8, 0, $d
+    $mv.EasingFunction = $ease
+    $El.BeginAnimation([Windows.UIElement]::OpacityProperty, $op)
+    $tt.BeginAnimation([Windows.Media.TranslateTransform]::YProperty, $mv)
+}
+
+# Windows 11 22H2+: Mica под окном (фон клиентской области прозрачный, карточки и панели — на своих подложках).
+# Windows 10, высокая контрастность, ошибка — плотный фон, как раньше
+function Set-UiBackdrop ($Win) {
+    if ([Environment]::OSVersion.Version.Build -lt 22621 -or [Windows.SystemParameters]::HighContrast) { return }
+    try {
+        $hwnd = (New-Object Windows.Interop.WindowInteropHelper $Win).Handle
+        if (-not [PcBase.Native]::SetMica($hwnd)) { return }
+        [PcBase.Native]::ExtendFrame($hwnd)
+        [Windows.Interop.HwndSource]::FromHwnd($hwnd).CompositionTarget.BackgroundColor = [Windows.Media.Colors]::Transparent
+        $Win.Background = [Windows.Media.Brushes]::Transparent
+    } catch { }
+}
+
+# размер, положение, развёрнутость, последний раздел: %LOCALAPPDATA%\tabula-rasa\ui.json
+function Get-UiStatePath { Join-Path $env:LOCALAPPDATA 'tabula-rasa\ui.json' }
+function Read-UiState {
+    try { return (Get-Content (Get-UiStatePath) -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+}
+function Save-UiState ($Win, [string]$Nav) {
+    try {
+        $b = if ($Win.WindowState -eq 'Normal') { New-Object Windows.Rect $Win.Left, $Win.Top, $Win.ActualWidth, $Win.ActualHeight } else { $Win.RestoreBounds }
+        $j = [ordered]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = $Win.WindowState -eq 'Maximized'; Nav = $Nav }
+        New-Item -ItemType Directory -Path (Split-Path (Get-UiStatePath)) -Force | Out-Null
+        [IO.File]::WriteAllText((Get-UiStatePath), ($j | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
+    } catch { }
+}
+# применить, только если окно целиком помещается на рабочих столах (монитор могли отключить)
+function Restore-UiState ($Win, $State) {
+    if (-not $State -or $State.Width -lt $Win.MinWidth -or $State.Height -lt $Win.MinHeight) { return }
+    $v = New-Object Windows.Rect ([Windows.SystemParameters]::VirtualScreenLeft), ([Windows.SystemParameters]::VirtualScreenTop),
+        ([Windows.SystemParameters]::VirtualScreenWidth), ([Windows.SystemParameters]::VirtualScreenHeight)
+    $r = New-Object Windows.Rect $State.Left, $State.Top, $State.Width, $State.Height
+    if (-not $v.Contains($r)) { return }
+    $Win.WindowStartupLocation = 'Manual'
+    $Win.Left = $State.Left; $Win.Top = $State.Top; $Win.Width = $State.Width; $Win.Height = $State.Height
+    if ($State.Max) { $Win.WindowState = 'Maximized' }
+}
+
+# ---------- «Откат изменений»: журналы изменений → Invoke-PbUndo (lib\run.ps1) в фоне ----------
+
+function Show-UndoDialog ($Owner) {
+    $theme = Initialize-Ui
+    $d = New-UiWindow 'dialog.xaml' $theme
+    $d.Owner = $Owner; $d.Width = 560
+    $d.FindName('Head').Text = 'Откат изменений'
+    $body = $d.FindName('Body'); $bp = $d.FindName('Primary'); $bs = $d.FindName('Secondary')
+    $logs = @(Get-PbChangeLogs)
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.TextWrapping = 'Wrap'; $tb.Margin = '0,4,0,8'
+    $tb.Text = if ($logs.Count) { 'Выберите журнал изменений. Изменения реестра, служб, задач и PATH из него будут отменены в обратном порядке.' } else { 'Журналов изменений нет: прогонов с изменениями на этом компьютере не было.' }
+    [void]$body.Children.Add($tb)
+    $list = New-Object Windows.Controls.ListBox
+    $list.MaxHeight = 260; $list.Margin = '0,0,0,8'
+    foreach ($l in $logs) {
+        $li = New-Object Windows.Controls.ListBoxItem
+        $li.Content = "$($l.Date.ToString('dd.MM.yyyy HH:mm'))   ·   изменений: $($l.Count)"; $li.Tag = $l.Path; $li.Padding = '8,6'
+        [void]$list.Items.Add($li)
+    }
+    if ($logs.Count) { $list.SelectedIndex = 0; [void]$body.Children.Add($list) }
+    $note = New-Object Windows.Controls.TextBlock
+    $note.TextWrapping = 'Wrap'; $note.Text = $script:PbUndoLimits; $note.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'TextMuted')
+    [void]$body.Children.Add($note)
+    $bp.Content = 'Откатить'; $bp.IsEnabled = [bool]$logs.Count
+    $bs.Content = 'Закрыть'; $bs.IsCancel = $true
+    $state = @{ Job = $null }
+    $timer = New-Object Windows.Threading.DispatcherTimer; $timer.Interval = [TimeSpan]::FromMilliseconds(300)
+    $timer.add_Tick({
+        $j = $state.Job
+        if (-not $j.Handle.IsCompleted) { return }
+        $timer.Stop()
+        $res = @(); try { $res = @($j.Ps.EndInvoke($j.Handle) | ForEach-Object { $_.PSObject.BaseObject }) } catch { $res = @(@{ Ok = $false; Text = $_.Exception.Message }) }
+        $j.Ps.Dispose()
+        $ok = @($res | Where-Object { $_.Ok }).Count; $bad = @($res | Where-Object { -not $_.Ok })
+        $body.Children.Clear()
+        $t = New-Object Windows.Controls.TextBlock; $t.TextWrapping = 'Wrap'
+        $t.Text = "Отменено изменений: $ok.$(if ($bad.Count) { " Не удалось: $($bad.Count)." }) Проводник и панель задач применят изменения после повторного входа или перезагрузки."
+        [void]$body.Children.Add($t)
+        foreach ($b in @($bad | Select-Object -First 8)) {
+            $e = New-Object Windows.Controls.TextBlock; $e.TextWrapping = 'Wrap'; $e.Margin = '0,4,0,0'; $e.Text = "• $($b.Text)"
+            $e.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'Danger'); [void]$body.Children.Add($e)
+        }
+        $bp.Visibility = 'Collapsed'; $bs.IsEnabled = $true
+    })
+    $bp.add_Click({
+        $file = [string]$list.SelectedItem.Tag
+        if (-not $file) { return }
+        if (-not (Show-UiMessage -Owner $d -Title 'Откатить изменения?' -Primary 'Откатить' -Secondary 'Назад' -SafeDefault -Lines @("Журнал: $file", @{ Text = $script:PbUndoLimits; Tone = 'muted' }))) { return }
+        $bp.IsEnabled = $false; $bs.IsEnabled = $false; $list.IsEnabled = $false; $tb.Text = 'Откат выполняется…'
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({ param($Root, $File) . (Join-Path $Root 'lib\common.ps1'); . (Join-Path $Root 'lib\run.ps1'); Invoke-PbUndo $File })
+        [void]$ps.AddArgument($script:PB.Root); [void]$ps.AddArgument($file)
+        $state.Job = @{ Ps = $ps; Handle = $ps.BeginInvoke() }
+        $timer.Start()
+    })
+    $d.add_Closing({ param($s, $e) if ($state.Job -and -not $state.Job.Handle.IsCompleted) { $e.Cancel = $true } })
+    [void]$d.ShowDialog()
+}
+
 # ---------- главное окно ----------
 
 function Show-SelectionDialog {
@@ -372,6 +531,7 @@ function Show-SelectionDialog {
         [string[]]$Notices,          # что сказать при открытии (переезд папок и т. п.)
         [bool]$DryRun = $true,
         [bool]$IsDomain = $false,
+        [bool]$RunInWindow = $true,  # план, прогон и итог — в окне (по умолчанию); $false — вернуть выбор, прогон в консоли (-Console)
         [string]$Title = 'Tabula Rasa'
     )
 
@@ -380,8 +540,11 @@ function Show-SelectionDialog {
     $ctl = @{}
     foreach ($n in 'TabInstall', 'TabCapture', 'InstallPane', 'InstallBar', 'CapturePane', 'CaptureHint', 'CaptureList', 'CaptureCard', 'CaptureCardIcon',
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
-        'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatAll', 'CatNone',
-        'List', 'ListEmpty', 'DetailHint', 'Detail', 'RbMineText', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
+        'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
+        'HeadLeft', 'MoreBtn', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
+        'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RebootBtn', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
+        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunApply', 'RunClose', 'RunStatus',
+        'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
         $ctl[$n] = $win.FindName($n)
@@ -392,7 +555,34 @@ function Show-SelectionDialog {
     $win.Height = [Math]::Max($win.MinHeight, [Math]::Min(800, $wa.Height - 48))
     $win.Title = $Title
     $ctl.Logo.Source = $theme.Icon
-    $ctl.HostChips.ItemsSource = @($env:COMPUTERNAME, "Windows $($script:PB.Os)") + @(if ($IsDomain) { 'в домене' })
+    # чипы шапки: при нехватке места «в домене» → значок с подсказкой, затем ОС → в подсказку к имени, затем имя — с многоточием
+    function New-Chip ([string]$Text, [string]$Tip, [string]$Icon, [double]$Max = [double]::PositiveInfinity) {
+        $c = New-Object PcBase.Chip; $c.Text = $Text; $c.Tip = $Tip; $c.Icon = $Icon; $c.MaxWidth = $Max; return $c
+    }
+    function Measure-UiText ([string]$T) {
+        $ft = New-Object Windows.Media.FormattedText $T, ([Globalization.CultureInfo]::CurrentUICulture), 'LeftToRight',
+            (New-Object Windows.Media.Typeface $win.FontFamily, 'Normal', 'Normal', 'Normal'), 14, [Windows.Media.Brushes]::Black
+        return $ft.WidthIncludingTrailingWhitespace
+    }
+    $os = "Windows $($script:PB.Os)"
+    function Update-HostChips {
+        $avail = $ctl.HeadLeft.ActualWidth - 140   # значок и название
+        $pad = 24                                   # поля и отступ пилюли
+        $wName = (Measure-UiText $env:COMPUTERNAME) + $pad; $wOs = (Measure-UiText $os) + $pad; $wDom = (Measure-UiText 'в домене') + $pad
+        $domIcon = [string][char]0xE7EF
+        if ($avail -ge $wName + $wOs + $(if ($IsDomain) { $wDom } else { 0 })) { $chips = @((New-Chip $env:COMPUTERNAME 'Имя компьютера'), (New-Chip $os 'Версия Windows')) + @(if ($IsDomain) { New-Chip 'в домене' 'Компьютер в домене: имя не меняется' }) }
+        elseif ($avail -ge $wName + $wOs + 36) { $chips = @((New-Chip $env:COMPUTERNAME 'Имя компьютера'), (New-Chip $os 'Версия Windows')) + @(if ($IsDomain) { New-Chip '' 'Компьютер в домене: имя не меняется' $domIcon }) }
+        elseif ($avail -ge $wName + 36) { $chips = @(New-Chip $env:COMPUTERNAME "$env:COMPUTERNAME · $os$(if ($IsDomain) { ' · в домене' })") + @(if ($IsDomain) { New-Chip '' 'Компьютер в домене: имя не меняется' $domIcon }) }
+        else { $chips = @(New-Chip $env:COMPUTERNAME "$env:COMPUTERNAME · $os$(if ($IsDomain) { ' · в домене' })" '' ([Math]::Max(48, $avail))) }
+        $ctl.HostChips.ItemsSource = $chips
+    }
+    $ctl.HeadLeft.add_SizeChanged({ Update-HostChips })
+    # узкое окно: «Программа» — только значком, поиск уже
+    $win.add_SizeChanged({
+        $narrow = $win.ActualWidth -lt 1200
+        $ctl.AddAppText.Visibility = if ($narrow) { 'Collapsed' } else { 'Visible' }
+        $ctl.SearchBox.Width = if ($narrow) { 240 } else { 300 }
+    })
 
     # --- модель: пункты и навигация ---
     $items = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
@@ -402,7 +592,7 @@ function Show-SelectionDialog {
     $secLabel = @{ apps = 'Программы'; tweaks = 'Настройки Windows'; files = 'Файлы из «Моих данных» загружаются на компьютер без установки' }
     function Add-Nav ([string]$Kind, [string]$Section, [string]$Name, [string]$Key) {
         $e = New-Object PcBase.NavEntry
-        $e.Kind = $Kind; $e.Section = $Section; $e.Name = $Name; $e.Key = $Key
+        $e.Kind = $Kind; $e.Section = $Section; $e.Name = $Name; $e.Key = $Key; $e.Icon = Get-CatIcon $Name
         $nav.Add($e)
         if ($Kind -eq 'cat') { $cats[$Key] = $e; if (-not $first[$Section]) { $first[$Section] = $e } }
         return $e
@@ -430,6 +620,7 @@ function Show-SelectionDialog {
             $it.Irreversible = [bool]$t.Irreversible
             $it.SearchText = @($t.Name, $t.Desc, $t.Id, $grp.Name, $t.Manual) -join "`n"
             if ($t.Irreversible) { $it.Facts.Add((New-Fact 'Необратимо' 'Не отменяется через undo.ps1, только точкой восстановления.' 'danger')) }
+            else { $it.Facts.Add((New-Fact 'Отмена' 'Отменяется через undo.ps1 или «⋯ → Откат изменений» в окне.')) }
             if ($t.Manual) { $it.Facts.Add((New-Fact 'Вручную после применения' $t.Manual)) }
             $items.Add($it)
         }
@@ -441,7 +632,7 @@ function Show-SelectionDialog {
     $fileGroup = 'Файлы · Мои файлы'
     [void](Add-Nav 'cat' 'files' 'Мои файлы' $fk)
     $navSummary = New-Object PcBase.NavEntry
-    $navSummary.Kind = 'summary'; $navSummary.Name = 'Итог'; $navSummary.Key = 'summary'
+    $navSummary.Kind = 'summary'; $navSummary.Name = 'Итог'; $navSummary.Key = 'summary'; $navSummary.Icon = [string][char]0xE9D5
     $navBottom = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
     $navBottom.Add($navSummary)
 
@@ -460,7 +651,13 @@ function Show-SelectionDialog {
         foreach ($w in $ui.Words) { if ($o.SearchText.IndexOf($w, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false } }
         return $true
     }
+    # фильтры по статусу программ: «не установленные» и «есть обновления» (оба — объединение); твики и файлы не фильтруются
+    function Test-StatusFilter ($o) {
+        if ($o.Kind -ne 'app' -or -not ($ctl.FilterMissing.IsChecked -or $ctl.FilterUpdates.IsChecked)) { return $true }
+        return ($ctl.FilterMissing.IsChecked -and $o.StatusKind -eq 'missing') -or ($ctl.FilterUpdates.IsChecked -and $o.StatusKind -eq 'update')
+    }
     function Test-Visible ($o) {
+        if (-not (Test-StatusFilter $o)) { return $false }
         if ($ui.Mode -eq 'search') { return (Test-Search $o) }
         if ($ui.Mode -eq 'summary') { return $o.IsChecked }
         return $o.CatKey -eq $ui.Cat
@@ -474,6 +671,8 @@ function Show-SelectionDialog {
             Apps     = @($appList | Where-Object { $on.ContainsKey('app:' + $_.Id) } | ForEach-Object { $_.Id })
             Configs  = @($appList | Where-Object { $_.Config -and $_.Config.Import -and $on.ContainsKey('app:' + $_.Id) -and $on['app:' + $_.Id].ConfigOn } | ForEach-Object { $_.Id })
             Tweaks   = @($Tweaks | Where-Object { $on.ContainsKey('tweak:' + $_.Id) } | ForEach-Object { $_.Id })
+            # отмеченные программы со статусом «есть обновление» — обновить через winget (Install-WingetApp)
+            Upgrades = @($items | Where-Object { $_.Kind -eq 'app' -and $_.IsChecked -and $_.StatusKind -eq 'update' } | ForEach-Object { $_.Id })
             # пока списка нет, файлы из сохранения не теряются: они уйдут и в новое сохранение, и в прогон
             Files    = @(@($items | Where-Object { $_.Kind -eq 'file' -and $_.IsChecked } | ForEach-Object { $_.Id }) + @($ui.WantFiles) | Sort-Object -Unique)
         }
@@ -492,6 +691,7 @@ function Show-SelectionDialog {
             $cats[$k].IsFull = $t -gt 0 -and $s -eq $t
         }
         $navSummary.CountText = if ($n) { "$n" } else { '' }
+        Update-CatCheck
 
         $c = Get-Chosen
         $parts = @("$($c.Apps.Count) $(Get-Plural $c.Apps.Count 'программа' 'программы' 'программ')$(if ($c.Configs.Count) { " (⚙ $($c.Configs.Count))" })",
@@ -520,6 +720,9 @@ function Show-SelectionDialog {
         $n = $view.Count
         $card = $ui.Mode -eq 'cat' -and $ui.Cat -eq $fk -and $ui.Files -ne 'ok'
         $ctl.CatButtons.Visibility = if ($ui.Mode -eq 'cat' -and -not $card) { 'Visible' } else { 'Collapsed' }
+        $appsHere = $ui.Mode -eq 'search' -or ($ui.Mode -eq 'cat' -and $ui.Cat -like 'apps|*')
+        $ctl.FilterBar.Visibility = if ($appsHere) { 'Visible' } else { 'Collapsed' }
+        Update-CatCheck
         switch ($ui.Mode) {
             'search' {
                 $ctl.ListTitle.Text = "Поиск: «$($ctl.Search.Text.Trim())»"
@@ -548,6 +751,7 @@ function Show-SelectionDialog {
         if ($e.Kind -eq 'summary') { $ui.Mode = 'summary' } else { $ui.Mode = 'cat'; $ui.Cat = $e.Key }
         Update-NavHits
         Update-View
+        Invoke-UiFade $ctl.List
     }
 
     # отметка в навигации: категории — в верхнем списке, «Итог» — в нижнем; $null — снять везде (идёт поиск)
@@ -564,6 +768,14 @@ function Show-SelectionDialog {
         $lb.SelectedItem = $e
         $c = $lb.ItemContainerGenerator.ContainerFromItem($e)
         if ($c) { [void]$c.Focus() }
+    }
+
+    # трёхпозиционная галочка категории: все / часть (null) / ни одного
+    function Update-CatCheck {
+        if ($ui.Mode -ne 'cat') { return }
+        $list = @($items | Where-Object { $_.CatKey -eq $ui.Cat -and (Test-StatusFilter $_) })
+        $on = @($list | Where-Object { $_.IsChecked }).Count
+        $ctl.CatCheck.IsChecked = if (-not $on) { $false } elseif ($on -eq $list.Count) { $true } else { $null }
     }
 
     function Set-Checked ($List, [bool]$On) {
@@ -1186,7 +1398,7 @@ function Show-SelectionDialog {
         $ck = 'apps|' + $A.Category
         if (-not $cats.Contains($ck)) {
             $e = New-Object PcBase.NavEntry
-            $e.Kind = 'cat'; $e.Section = 'apps'; $e.Name = $A.Category; $e.Key = $ck
+            $e.Kind = 'cat'; $e.Section = 'apps'; $e.Name = $A.Category; $e.Key = $ck; $e.Icon = Get-CatIcon $A.Category
             $idx = 0
             for ($i = 0; $i -lt $nav.Count; $i++) { if ($nav[$i].Kind -eq 'header' -and $nav[$i].Section -eq 'tweaks') { $idx = $i; break } }
             $nav.Insert($idx, $e); $cats[$ck] = $e
@@ -1304,7 +1516,6 @@ function Show-SelectionDialog {
         $it = $ctl.List.SelectedItem
         if ($it) {
             $ctl.Detail.DataContext = $it
-            if ($it.HasConfig -and $it.ConfigName) { $ctl.RbMineText.Text = $it.ConfigName.Substring(0, 1).ToUpper() + $it.ConfigName.Substring(1) }
             $ctl.Detail.Visibility = 'Visible'; $ctl.DetailHint.Visibility = 'Collapsed'
         } else {
             $ctl.Detail.Visibility = 'Collapsed'; $ctl.DetailHint.Visibility = 'Visible'
@@ -1330,8 +1541,20 @@ function Show-SelectionDialog {
         }
     })
 
-    $ctl.CatAll.add_Click({ Set-Checked @($items | Where-Object { $_.CatKey -eq $ui.Cat }) $true })
-    $ctl.CatNone.add_Click({ Set-Checked @($items | Where-Object { $_.CatKey -eq $ui.Cat }) $false })
+    # «Выбрать всё»: все отмечены — снять всё, иначе — отметить всё (вариант «с моими настройками» не включается)
+    $ctl.CatCheck.add_Click({
+        $list = @($items | Where-Object { $_.CatKey -eq $ui.Cat -and (Test-StatusFilter $_) })
+        $all = $list.Count -and -not @($list | Where-Object { -not $_.IsChecked }).Count
+        Set-Checked $list (-not $all)
+        Update-CatCheck
+    })
+    $ctl.FilterMissing.add_Click({ Update-View; Update-NavHits })
+    $ctl.FilterUpdates.add_Click({ Update-View; Update-NavHits })
+    $ctl.MarkUpdates.add_Click({
+        $up = @($items | Where-Object { $_.Kind -eq 'app' -and $_.StatusKind -eq 'update' })
+        Set-Checked $up $true
+        Show-Notice "Отмечено обновлений: $($up.Count). Программы будут обновлены через winget."
+    })
 
     $ctl.SetBtn.add_ContextMenuOpening({ Fill-SaveMenu })
     $ctl.SetBtn.add_Click({
@@ -1408,7 +1631,9 @@ function Show-SelectionDialog {
     })
     $win.add_Closed({
         if ($ui.Job -and $ui.Job.Sync.Pid) { Stop-Process -Id $ui.Job.Sync.Pid -Force -ErrorAction SilentlyContinue }
-        $filesTimer.Stop(); $capTimer.Stop()
+        $filesTimer.Stop(); $capTimer.Stop(); $statusTimer.Stop(); $themeTimer.Stop(); $engineTimer.Stop(); $runTimer.Stop()
+        if ($ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted) { try { [void]$ui.StatusJob.Ps.BeginStop($null, $null) } catch { } }
+        Save-UiState $win $(if ($ui.Nav) { $ui.Nav.Key } else { '' })
         if ($ui.FilesJob) { try { [void]$ui.FilesJob.Ps.BeginStop($null, $null) } catch { } }   # не ждать сеть при закрытии
     })
 
@@ -1425,42 +1650,417 @@ function Show-SelectionDialog {
     $ctl.ModePlan.add_Checked({ Update-OkBtn })
     $ctl.ModeApply.add_Checked({ Update-OkBtn })
 
-    $ctl.OkBtn.add_Click({
+    # --- статус программ и твиков: фоновая проверка при старте (lib\status.ps1), окно не ждёт ---
+    $statusTimer = New-Object Windows.Threading.DispatcherTimer
+    $statusTimer.Interval = [TimeSpan]::FromMilliseconds(400)
+    $ui.Status = @{ Apps = @{}; Tweaks = @{} }
+    $ui.IconTried = @{}
+
+    function Set-ItemStatuses {
+        $s = $ui.StatusJob.Sync
+        if ($s.Apps) {
+            foreach ($it in $items) {
+                if ($it.Kind -ne 'app' -or -not $s.Apps.ContainsKey($it.Id)) { continue }
+                $st = $s.Apps[$it.Id]
+                if ($it.StatusKind -ne $st.Kind -or $it.StatusText -ne $st.Text) { $it.StatusKind = $st.Kind; $it.StatusText = $st.Text }
+                if ($st.Icon -and -not $it.IconSource -and -not $ui.IconTried[$it.Id]) { $ui.IconTried[$it.Id] = $true; $it.IconSource = Get-ExeIcon $st.Icon }
+            }
+            $ui.Status.Apps = $s.Apps
+        }
+        if ($s.Tweaks) {
+            foreach ($it in $items) {
+                if ($it.Kind -ne 'tweak' -or -not $s.Tweaks.ContainsKey($it.Id)) { continue }
+                $k = $s.Tweaks[$it.Id]
+                $it.StatusKind = $k; $it.StatusText = $script:PbTweakStatusText[$k]
+            }
+            $ui.Status.Tweaks = $s.Tweaks
+        }
+        $up = @($items | Where-Object { $_.Kind -eq 'app' -and $_.StatusKind -eq 'update' }).Count
+        $ctl.MarkUpdates.Content = "Отметить обновления ($up)"
+        $ctl.MarkUpdates.Visibility = if ($up) { 'Visible' } else { 'Collapsed' }
+    }
+
+    function Start-StatusJob {
+        if ($ui.StatusJob) { return }
+        $sync = [hashtable]::Synchronized(@{ Apps = $null; Tweaks = $null; WingetError = $null; Done = $false })
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({
+            param($Root, $Apps, $Os, $Sync)
+            . (Join-Path $Root 'lib\common.ps1'); . (Join-Path $Root 'lib\catalog.ps1'); . (Join-Path $Root 'lib\status.ps1')
+            $script:PB.Root = $Root; $script:PB.Os = $Os
+            Update-SessionPath
+            . (Join-Path $Root 'catalog\tweaks.ps1')   # скриптблоки твиков — свои, этого runspace
+            $tw = @($Tweaks | Where-Object { $_.Os -contains $Os })
+            if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { $Sync.WingetError = 'winget не найден' }
+            Start-PbStatusScan $Apps $tw $Sync
+        })
+        # программы — только данные (без скриптблоков); значки — по DisplayIcon
+        $data = @($appList | ForEach-Object { @{ Id = $_.Id; Name = $_.Name; WingetId = $_.WingetId; Source = $_.Source; Detect = $_.Detect } })
+        foreach ($a in @($script:PB.Root, $data, $script:PB.Os, $sync)) { [void]$ps.AddArgument($a) }
+        $ui.StatusJob = @{ Ps = $ps; Handle = $ps.BeginInvoke(); Sync = $sync }
+        $ctl.StatusScan.Text = 'Проверка установленных программ…'
+        $statusTimer.Start()
+    }
+
+    $statusTimer.add_Tick({
+        $j = $ui.StatusJob
+        if (-not $j) { $statusTimer.Stop(); return }
+        Set-ItemStatuses
+        if (-not $j.Handle.IsCompleted) { return }
+        $statusTimer.Stop()
+        try { [void]$j.Ps.EndInvoke($j.Handle) } catch { $j.Sync.WingetError = $_.Exception.Message }
+        $j.Ps.Dispose()
+        Set-ItemStatuses
+        $apps = @($items | Where-Object { $_.Kind -eq 'app' })
+        $inst = @($apps | Where-Object { $_.StatusKind -in 'installed', 'update' }).Count
+        $up = @($apps | Where-Object { $_.StatusKind -eq 'update' }).Count
+        $ctl.StatusScan.Text = if ($j.Sync.WingetError) { "Установлено: $inst. Обновления не проверены: $($j.Sync.WingetError)." } else { "Установлено: $inst из $($apps.Count), обновлений: $up." }
+        Update-View
+    })
+
+    # --- план, прогон, итог — экран RunPane ---
+    $runSteps = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
+    $runView = [Windows.Data.CollectionViewSource]::GetDefaultView($runSteps)
+    $runView.GroupDescriptions.Add((New-Object Windows.Data.PropertyGroupDescription 'PhaseName'))
+    $ctl.RunList.ItemsSource = $runSteps
+    $manualItems = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
+    $ctl.ManualList.ItemsSource = $manualItems
+    $runTimer = New-Object Windows.Threading.DispatcherTimer
+    $runTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+
+    function Set-RunButtons ([string]$State) {
+        $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run', 'done'); RunClose = @('done') }
+        foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
+        # во время прогона выбор и режимы не трогаются
+        foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
+    }
+
+    function Show-Pane ([string]$Which) {
+        $run = $Which -eq 'run'
+        $ctl.RunPane.Visibility = if ($run) { 'Visible' } else { 'Collapsed' }
+        $ctl.InstallPane.Visibility = if (-not $run -and -not $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
+        $ctl.InstallBar.Visibility = $ctl.InstallPane.Visibility
+        $ctl.CapturePane.Visibility = if (-not $run -and $ctl.TabCapture.IsChecked) { 'Visible' } else { 'Collapsed' }
+    }
+
+    function Set-RunSteps ($Plan) {
+        $runSteps.Clear()
+        foreach ($p in $Plan) {
+            $r = New-Object PcBase.RunStep
+            $r.Key = $p.Key; $r.PhaseName = $p.PhaseName; $r.Name = $p.Name; $r.Note = $p.Note; $r.Irreversible = [bool]$p.Irreversible
+            $r.State = $p.State; $r.Detail = $p.Detail
+            $runSteps.Add($r)
+        }
+    }
+
+    # проверка имени и пустого выбора; @{ Sel; Name } или $null
+    function Get-RunChoice {
         $name = if ($IsDomain) { '' } else { $ctl.PcName.Text.Trim() }
         if ($name -and ($name -notmatch '^[A-Za-z0-9-]{1,15}$' -or $name -match '^\d+$')) {
             $ctl.PcName.SetResourceReference([Windows.Controls.Control]::BorderBrushProperty, 'Danger')
             [void](Show-UiMessage -Owner $win -Title 'Недопустимое имя компьютера' -Lines @('Допустимы латинские буквы, цифры и дефис, не более 15 символов; имя не может состоять только из цифр. Оставьте поле пустым, чтобы не менять имя.'))
             [void]$ctl.PcName.Focus()
-            return
+            return $null
         }
         $c = Get-Chosen
         if (-not $c.Apps.Count -and -not $c.Tweaks.Count -and -not $c.Files.Count -and -not $name) {
             [void](Show-UiMessage -Owner $win -Title 'Ничего не выбрано' -Lines @('Отметьте хотя бы одну программу, настройку или файл либо укажите новое имя компьютера.'))
+            return $null
+        }
+        $c.Name = if ($name) { $name.ToUpper() } else { $null }
+        $c.FileTitles = @($c.Files | ForEach-Object { $f = $_; $t = @($items | Where-Object { $_.Kind -eq 'file' -and $_.Id -eq $f } | ForEach-Object { $_.Name }); if ($t) { $t[0] } else { $f } })
+        return $c
+    }
+
+    # подтверждение перед применением: счётчики, список необратимого, имя компьютера
+    function Confirm-Apply ($C) {
+        $irr = @($Tweaks | Where-Object { $_.Irreversible -and $C.Tweaks -contains $_.Id } | ForEach-Object { $_.Name })
+        $lines = @("Программ: $($C.Apps.Count)$(if ($C.Upgrades.Count) { ", из них обновлений: $($C.Upgrades.Count)" })$(if ($C.Configs.Count) { ", с моими настройками: $($C.Configs.Count)" })",
+            "Настроек Windows: $($C.Tweaks.Count)")
+        if ($irr.Count) {
+            $lines += @{ Text = "Необратимые изменения ($($irr.Count)). Они не отменяются через undo.ps1, только точкой восстановления:"; Tone = 'danger'; Gap = $true }
+            $lines += @{ Text = (($irr | ForEach-Object { "• $_" }) -join "`n"); Tone = 'danger' }
+            $lines += @{ Text = 'Если точку восстановления создать не удастся (защита системы отключена политикой), перед ними будет задан вопрос.'; Tone = 'muted' }
+        }
+        if ($C.Files.Count) { $lines += "Файлов: $($C.Files.Count) (загрузка в «Рабочий стол\tabula-rasa-files»)" }
+        $lines += if ($C.Name) { "Имя компьютера: $env:COMPUTERNAME → $($C.Name)" } else { "Имя компьютера: $env:COMPUTERNAME (без изменений)" }
+        $lines += @{ Text = 'Изменения будут применены сразу. Перед применением создаётся точка восстановления; отмена — «⋯ → Откат изменений» или undo.ps1.'; Tone = 'muted'; Gap = $true }
+        return (Show-UiMessage -Owner $win -Title "Применить к $($env:COMPUTERNAME)?" -Lines $lines -Primary 'Применить' -Secondary 'Назад' -SafeDefault)
+    }
+
+    # план в окне: те же шаги, что выполнит прогон, с пометками «будет пропущено», «необратимо»
+    function Show-Plan ($C) {
+        $plan = Get-PbRunPlan $C $appList $Tweaks $ui.Status
+        $ui.PlanSel = $C
+        Set-RunSteps $plan
+        $ctl.RunTitle.Text = 'План'
+        $irr = @($plan | Where-Object { $_.Irreversible }).Count
+        $skip = @($plan | Where-Object { $_.Note -match 'пропущено' }).Count
+        $ctl.RunHint.Text = "Шагов: $($plan.Count)$(if ($skip) { ", будет пропущено: $skip" })$(if ($irr) { ", необратимых: $irr" }). Изменения пока не вносились."
+        $ctl.RunProgress.Visibility = 'Collapsed'; $ctl.RunBanner.Visibility = 'Collapsed'; $ctl.ManualBox.Visibility = 'Collapsed'
+        $ctl.RunStatus.Text = 'Чтобы выполнить план, нажмите «Применить…».'
+        Set-RunButtons 'plan'
+        Show-Pane 'run'
+    }
+
+    function Add-RunLog ([string]$Line) {
+        $ctl.RunLog.AppendText($Line + "`r`n")
+        $ctl.RunLog.ScrollToEnd()
+        try { [IO.File]::AppendAllText($ui.RunLogFile, $Line + "`r`n", (New-Object Text.UTF8Encoding $false)) } catch { }
+    }
+
+    # прогон в фоновом runspace: каталог и твики загружаются там же (скриптблоки привязаны к своему runspace)
+    function Start-Run ($C) {
+        $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'   # у каждого прогона — свой журнал изменений
+        New-Item -ItemType Directory -Path $script:PB.LogDir -Force | Out-Null
+        $ui.RunLogFile = Join-Path $script:PB.LogDir "run_$stamp.log"
+        $ui.RunStamp = $stamp
+        $sync = [hashtable]::Synchronized(@{ Status = $ui.Status; Steps = $null; Current = $null; SkipCurrent = $false; StopAfter = $false
+            Ask = $null; Answer = $null; Done = $false; NeedReboot = $false; Manual = @() })
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({
+            param($Root, $DataRoot, $LogDir, $Stamp, $Sel, $Sync)
+            foreach ($f in 'common', 'data', 'files', 'catalog', 'configs', 'status', 'run') { . (Join-Path $Root "lib\$f.ps1") }
+            $script:PB.Root = $Root; $script:PB.DataRoot = $DataRoot; $script:PB.LogDir = $LogDir; $script:PB.Stamp = $Stamp
+            Get-EnvInfo
+            $Apps = (Import-PowerShellDataFile (Join-Path $Root 'catalog\apps.psd1')).Apps
+            $Apps = @($Apps) + @((Read-PbUserCatalog @($Apps | ForEach-Object { $_.Id })).Apps)
+            $Apps = @($Apps | Where-Object { -not $_.Os -or $_.Os -contains $script:PB.Os })
+            . (Join-Path $Root 'catalog\tweaks.ps1')
+            $Tweaks = @($Tweaks | Where-Object { $_.Os -contains $script:PB.Os })
+            $plan = Get-PbRunPlan $Sel $Apps $Tweaks $Sync.Status
+            $Sync.Steps = $plan
+            Invoke-PbRun $plan $Sel $Apps $Tweaks $Sync
+        })
+        foreach ($a in @($script:PB.Root, $script:PB.DataRoot, $script:PB.LogDir, $stamp, $C, $sync)) { [void]$ps.AddArgument($a) }
+        $ui.Run = @{ Ps = $ps; Handle = $ps.BeginInvoke(); Sync = $sync; Sel = $C; LogPos = 0; Built = $false }
+        $ctl.RunTitle.Text = 'Выполнение'
+        $ctl.RunHint.Text = "Компьютер $env:COMPUTERNAME. Окно можно свернуть: по окончании кнопка на панели задач замигает."
+        $ctl.RunLog.Clear(); $manualItems.Clear()
+        $ctl.RunProgress.Value = 0; $ctl.RunProgress.Visibility = 'Visible'
+        $ctl.RunBanner.Visibility = 'Collapsed'; $ctl.ManualBox.Visibility = 'Collapsed'
+        $ctl.RunStop.IsEnabled = $true; $ctl.RunStop.Content = 'Остановить после текущего'
+        $ctl.RunStatus.Text = 'Подготовка…'
+        if (-not $win.TaskbarItemInfo) { $win.TaskbarItemInfo = New-Object Windows.Shell.TaskbarItemInfo }
+        $win.TaskbarItemInfo.ProgressState = 'Indeterminate'
+        Set-RunButtons 'run'
+        Show-Pane 'run'
+        Add-RunLog "Tabula Rasa, прогон $stamp, компьютер $env:COMPUTERNAME"
+        $runTimer.Start()
+    }
+
+    $runTimer.add_Tick({
+        $r = $ui.Run
+        if (-not $r) { $runTimer.Stop(); return }
+        $s = $r.Sync
+        # строки Write-Host из прогона (поток Information) → журнал в окне и run_<дата>.log
+        $info = $r.Ps.Streams.Information
+        while ($r.LogPos -lt $info.Count) { Add-RunLog ([string]$info[$r.LogPos].MessageData); $r.LogPos++ }
+        if ($s.Steps -and -not $r.Built) { Set-RunSteps $s.Steps; $r.Built = $true }
+        if ($r.Built) {
+            $i = 0; $done = 0; $cur = $null
+            foreach ($p in $s.Steps) {
+                $v = $runSteps[$i]; $i++
+                if ($v.State -ne $p.State) { $v.State = $p.State }
+                if ($v.Detail -ne $p.Detail) { $v.Detail = $p.Detail }
+                if ($p.State -in 'done', 'skip', 'error') { $done++ } elseif ($p.State -eq 'run') { $cur = $p }
+            }
+            $total = [Math]::Max(1, $runSteps.Count)
+            $ctl.RunProgress.Value = $done / $total
+            $win.TaskbarItemInfo.ProgressState = 'Normal'; $win.TaskbarItemInfo.ProgressValue = $done / $total
+            if ($cur) { $ctl.RunStatus.Text = "Шаг $([Math]::Min($done + 1, $total)) из $($runSteps.Count): $($cur.Name)" }
+        }
+        # вопрос из прогона (нет точки восстановления и т. п.) — диалог в окне вместо Read-Host
+        if ($s.Ask -and $null -eq $s.Answer -and -not $ui.Asking) {
+            $ui.Asking = $true
+            $q = $s.Ask
+            $ans = Show-UiMessage -Owner $win -Title 'Нужно решение' -Primary 'Выполнить' -Secondary 'Пропустить' -SafeDefault -Lines (@($q.Text) + @(@($q.Items) | ForEach-Object { "• $_" }))
+            $s.Answer = [bool]$ans
+            $ui.Asking = $false
+        }
+        if (-not $r.Handle.IsCompleted) { return }
+        $runTimer.Stop()
+        $err = $null
+        try { [void]$r.Ps.EndInvoke($r.Handle) } catch { $err = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message } }
+        while ($r.LogPos -lt $info.Count) { Add-RunLog ([string]$info[$r.LogPos].MessageData); $r.LogPos++ }
+        $r.Ps.Dispose()
+        if ($err) { Add-RunLog "ОШИБКА: $err" }
+        Complete-Run $err
+    })
+
+    function Complete-Run ([string]$Err) {
+        $r = $ui.Run; $s = $r.Sync
+        $bad = @($runSteps | Where-Object { $_.State -eq 'error' }).Count
+        $skip = @($runSteps | Where-Object { $_.State -eq 'skip' }).Count
+        $ctl.RunTitle.Text = if ($Err) { 'Прогон прерван' } elseif ($bad) { "Готово, ошибок: $bad" } else { 'Готово' }
+        $ctl.RunHint.Text = "Выполнено шагов: $(@($runSteps | Where-Object { $_.State -eq 'done' }).Count) из $($runSteps.Count)$(if ($skip) { ", пропущено: $skip" })$(if ($bad) { ", с ошибкой: $bad" }). Журналы: $($script:PB.LogDir)."
+        if ($Err) { $ctl.RunHint.Text += " Прогон прерван: $Err" }
+        $ctl.RunProgress.Value = 1
+        $win.TaskbarItemInfo.ProgressState = if ($bad -or $Err) { 'Error' } else { 'None' }
+        $ctl.RunBanner.Visibility = if ($s.NeedReboot) { 'Visible' } else { 'Collapsed' }
+        # «выполнить вручную» — галочки, отметки сохраняются рядом с журналами
+        $manualItems.Clear()
+        $state = Join-Path $script:PB.LogDir "manual_$($ui.RunStamp).json"
+        foreach ($m in @($s.Manual)) {
+            $it = New-Object PcBase.Item; $it.Name = $m
+            $it.add_PropertyChanged({ try { @($manualItems | ForEach-Object { @{ Text = $_.Name; Done = $_.IsChecked } }) | ConvertTo-Json | Set-Content -Path $state -Encoding UTF8 } catch { } })
+            $manualItems.Add($it)
+        }
+        $ctl.ManualBox.Visibility = if ($manualItems.Count) { 'Visible' } else { 'Collapsed' }
+        $ctl.RunStatus.Text = "Журнал выполнения: $($ui.RunLogFile)"
+        Set-RunButtons 'done'
+        $ctl.RunRetry.Visibility = if ($bad) { 'Visible' } else { 'Collapsed' }
+        if (-not $win.IsActive) { [PcBase.Native]::Flash((New-Object Windows.Interop.WindowInteropHelper $win).Handle) }
+        $ui.Ran = $true
+        $ui.Run = $null
+        if ($ui.StatusJob -and $ui.StatusJob.Handle.IsCompleted) { $ui.StatusJob = $null; Start-StatusJob }   # статусы после прогона — заново
+    }
+
+    # «Повторить упавшее»: новый прогон только из шагов с ошибкой
+    function Get-RetryChoice {
+        $keys = @($runSteps | Where-Object { $_.State -eq 'error' } | ForEach-Object { $_.Key })
+        $p = $ui.LastSel
+        $sel = @{ Apps = @(); Tweaks = @(); Configs = @(); Files = @(); FileTitles = @(); Name = $null; Upgrades = @($p.Upgrades) }
+        foreach ($k in $keys) {
+            switch -Regex ($k) {
+                '^app:(.+)$' { $sel.Apps += $Matches[1] }
+                '^tweak:(.+)$' { $sel.Tweaks += $Matches[1] }
+                '^config:(.+)$' { $sel.Configs += $Matches[1] }
+                '^files$' { $sel.Files = @($p.Files); $sel.FileTitles = @($p.FileTitles) }
+                '^rename$' { $sel.Name = $p.Name }
+            }
+        }
+        return $sel
+    }
+
+    $ctl.RunApply.add_Click({
+        if (-not (Confirm-Apply $ui.PlanSel)) { return }
+        $ui.LastSel = $ui.PlanSel
+        Start-Run $ui.PlanSel
+    })
+    $ctl.RunBack.add_Click({ $runSteps.Clear(); Show-Pane 'select'; Set-RunButtons 'plan' })
+    $ctl.RunSkip.add_Click({ if ($ui.Run) { $ui.Run.Sync.SkipCurrent = $true; $ctl.RunStatus.Text = 'Текущий шаг будет пропущен…' } })
+    $ctl.RunStop.add_Click({
+        if (-not $ui.Run) { return }
+        $ui.Run.Sync.StopAfter = $true
+        $ctl.RunStop.IsEnabled = $false; $ctl.RunStop.Content = 'Остановится после текущего шага'
+    })
+    $ctl.RunRetry.add_Click({
+        $sel = Get-RetryChoice
+        if (-not (Confirm-Apply $sel)) { return }
+        Start-Run $sel
+    })
+    $ctl.RunOpenLog.add_Click({ Start-Process explorer.exe $script:PB.LogDir })
+    $ctl.RunClose.add_Click({ $win.DialogResult = $true })
+    $ctl.RebootBtn.add_Click({
+        if (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.')) { Restart-Computer -Force }
+    })
+    $ctl.LogToggle.add_Click({
+        $show = $ctl.RunLog.Visibility -ne 'Visible'
+        $ctl.RunLog.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
+        $ctl.LogToggle.Content = if ($show) { 'Скрыть журнал' } else { 'Показать журнал' }
+    })
+    # пока идёт прогон, окно не закрывается: прерывать установку посередине нельзя
+    $win.add_Closing({
+        param($sender, $e)
+        if ($ui.Run) {
+            $e.Cancel = $true
+            [void](Show-UiMessage -Owner $win -Title 'Прогон выполняется' -Lines @('Чтобы прервать прогон, нажмите «Остановить после текущего» и дождитесь окончания шага.'))
+        }
+    })
+
+    # --- «⋯»: откат, о программе, клавиши ---
+    function Show-Keys {
+        [void](Show-UiMessage -Owner $win -Title 'Клавиши' -Lines @(
+            'Ctrl+F — поиск, Esc — очистить поиск', 'Ctrl+1 / 2 / 3 — программы, настройки Windows, файлы', '↑ / ↓ — категории, Пробел — отметить пункт',
+            'Ctrl+S — сохранить отметки', 'F1 — этот список'))
+    }
+    function Show-About {
+        $st = Get-PbDataState
+        [void](Show-UiMessage -Owner $win -Title 'О программе' -Lines @(
+            "Tabula Rasa $(Get-PbEngineVersion)", "Папка программы: $($script:PB.Root)",
+            $(if ($ui.EngineBehind) { @{ Text = 'Доступна новая версия. Она будет установлена при следующем запуске Tabula Rasa.'; Tone = 'strong' } } else { 'Новая версия проверяется и устанавливается при каждом запуске.' }),
+            $(if ($st.Connected) { "Мои данные: $($st.Repo)$(if ($st.Pending) { ", не отправлено: $($st.Pending)" })" } else { 'Мои данные: не подключены' }),
+            "Журналы: $($script:PB.LogDir)",
+            @{ Text = 'Исходный код: https://github.com/iheeae/tabula-rasa'; Tone = 'muted'; Gap = $true }))
+    }
+    $ctl.MoreBtn.add_Click({
+        $m = $ctl.MoreBtn.ContextMenu
+        $m.Items.Clear()
+        foreach ($p in @(@('Откат изменений…', 'undo'), @('О программе', 'about'), @('Клавиши   F1', 'keys'))) {
+            $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $p[0]; $mi.Tag = $p[1]; [void]$m.Items.Add($mi)
+        }
+        $m.PlacementTarget = $ctl.MoreBtn; $m.IsOpen = $true
+    })
+    $ctl.MoreBtn.ContextMenu.AddHandler([Windows.Controls.MenuItem]::ClickEvent, [Windows.RoutedEventHandler]{
+        param($s, $e)
+        switch ([string]$e.Source.Tag) { 'undo' { Show-UndoDialog $win } 'about' { Show-About } 'keys' { Show-Keys } }
+    })
+
+    # новая версия движка: проверка в фоне (git fetch), установится при следующем запуске (setup.ps1)
+    $engineTimer = New-Object Windows.Threading.DispatcherTimer
+    $engineTimer.Interval = [TimeSpan]::FromSeconds(1)
+    function Start-EngineCheck {
+        if (-not (Get-Command git -ErrorAction SilentlyContinue) -or -not (Test-Path (Join-Path $script:PB.Root '.git'))) { return }
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript({
+            param($Root)
+            & git -C $Root fetch --quiet origin master 2>$null
+            if ($LASTEXITCODE -ne 0) { return $false }
+            return ((& git -C $Root rev-parse HEAD 2>$null) -ne (& git -C $Root rev-parse origin/master 2>$null))
+        })
+        [void]$ps.AddArgument($script:PB.Root)
+        $ui.EngineJob = @{ Ps = $ps; Handle = $ps.BeginInvoke() }
+        $engineTimer.Start()
+    }
+    $engineTimer.add_Tick({
+        $j = $ui.EngineJob
+        if (-not $j -or -not $j.Handle.IsCompleted) { return }
+        $engineTimer.Stop()
+        try { $ui.EngineBehind = [bool](@($j.Ps.EndInvoke($j.Handle))[-1]) } catch { }
+        $j.Ps.Dispose(); $ui.EngineJob = $null
+        if ($ui.EngineBehind) { Show-Notice 'Доступна новая версия Tabula Rasa. Она будет установлена при следующем запуске.' }
+    })
+
+    # тема и акцент Windows меняются на лету: опрос раз в 2 с (обработчик SystemEvents пришёл бы из чужого потока)
+    $themeTimer = New-Object Windows.Threading.DispatcherTimer
+    $themeTimer.Interval = [TimeSpan]::FromSeconds(2)
+    $ui.ThemeKey = "$($theme.Dark)|$($theme.Accent)|$([Windows.SystemParameters]::HighContrast)"
+    $themeTimer.add_Tick({
+        $t = Get-UiTheme
+        $k = "$($t.Dark)|$($t.Accent)|$([Windows.SystemParameters]::HighContrast)"
+        if ($k -eq $ui.ThemeKey) { return }
+        $ui.ThemeKey = $k
+        Set-UiPalette ([Windows.Application]::Current.Resources) $t
+        $icon = New-UiIcon ([Windows.Application]::Current.Resources)
+        $win.Icon = $icon; $ctl.Logo.Source = $icon
+        [PcBase.Native]::SetDarkTitleBar((New-Object Windows.Interop.WindowInteropHelper $win).Handle, [bool]$t.Dark)
+    })
+
+    # «Показать план» — план в окне; «Применить» — подтверждение и прогон в окне.
+    # С -Console (RunInWindow = $false) — как раньше: выбор возвращается в setup.ps1, прогон в консоли
+    $ctl.OkBtn.add_Click({
+        $c = Get-RunChoice
+        if (-not $c) { return }
+        if (-not $RunInWindow) {
+            if ($ctl.ModeApply.IsChecked -and -not (Confirm-Apply $c)) { return }
+            $ui.Result = $c
+            $win.DialogResult = $true
             return
         }
         if ($ctl.ModeApply.IsChecked) {
-            $irr = @($Tweaks | Where-Object { $_.Irreversible -and $c.Tweaks -contains $_.Id } | ForEach-Object { $_.Name })
-            $lines = @("Программ: $($c.Apps.Count)$(if ($c.Configs.Count) { ", из них с моими настройками: $($c.Configs.Count)" })",
-                "Настроек Windows: $($c.Tweaks.Count)")
-            if ($irr.Count) {
-                $lines += @{ Text = "Необратимые изменения ($($irr.Count)). Они не отменяются через undo.ps1, только точкой восстановления:"; Tone = 'danger'; Gap = $true }
-                $lines += @{ Text = (($irr | ForEach-Object { "• $_" }) -join "`n"); Tone = 'danger' }
-                $lines += @{ Text = 'Если точку восстановления создать не удастся (защита системы отключена политикой), перед ними будет задан вопрос.'; Tone = 'muted' }
-            }
-            if ($c.Files.Count) { $lines += "Файлов: $($c.Files.Count) (загрузка в «Рабочий стол\tabula-rasa-files»)" }
-            $lines += if ($name) { "Имя компьютера: $env:COMPUTERNAME → $($name.ToUpper())" } else { "Имя компьютера: $env:COMPUTERNAME (без изменений)" }
-            $lines += @{ Text = 'Изменения будут применены сразу. Перед применением создаётся точка восстановления; отмена — undo.ps1.'; Tone = 'muted'; Gap = $true }
-            if (-not (Show-UiMessage -Owner $win -Title "Применить к $($env:COMPUTERNAME)?" -Lines $lines -Primary 'Применить' -Secondary 'Назад' -SafeDefault)) { return }
-        }
-        $ui.Result = $c; $ui.Name = $name
-        $win.DialogResult = $true
+            if (-not (Confirm-Apply $c)) { return }
+            $ui.PlanSel = $c; $ui.LastSel = $c
+            Start-Run $c
+        } else { Show-Plan $c }
     })
 
     # горячие клавиши: Ctrl+F — поиск, Esc — очистить его, Ctrl+1/2/3 — разделы
     $win.add_PreviewKeyDown({
         param($s, $e)
         $ctrl = [Windows.Input.Keyboard]::Modifiers -eq [Windows.Input.ModifierKeys]::Control
-        if ($ctl.TabCapture.IsChecked) { return }   # клавиши каталога — только в режиме «Установка»
+        if ($e.Key -eq 'F1') { $e.Handled = $true; Show-Keys; return }
+        if ($ctl.TabCapture.IsChecked -or $ctl.RunPane.Visibility -eq 'Visible') { return }   # клавиши каталога — только при выборе
         if ($ctrl -and $e.Key -eq 'F') { [void]$ctl.Search.Focus(); $ctl.Search.SelectAll(); $e.Handled = $true; return }
         if ($ctrl -and $e.Key -eq 'S') { $e.Handled = $true; Save-Current; return }
         if ($e.Key -eq 'Escape' -and $ctl.Search.Text) { $ctl.Search.Text = ''; $e.Handled = $true; return }
@@ -1485,23 +2085,32 @@ function Show-SelectionDialog {
     }
     if (@($Notices | Where-Object { $_ }).Count) { Show-Notice (@($Notices | Where-Object { $_ }) -join ' ') 'warn' }
     Update-OkBtn
+    $saved = Read-UiState
+    Restore-UiState $win $saved
     $start = $first['apps']; if (-not $start) { $start = @($cats.Values)[0] }
+    if ($saved -and $saved.Nav -and $cats.Contains([string]$saved.Nav)) { $start = $cats[[string]$saved.Nav] }
     $ctl.Nav.SelectedItem = $start
+    $win.add_SourceInitialized({ Set-UiBackdrop $win })
     $win.add_ContentRendered({
         # время от старта процесса до окна — в журнал выполнения (setup.ps1); цель — меньше 2 с
         try { $script:PB.WindowShownSec = [Math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 1) } catch { }
         # Topmost нужен, только чтобы окно появилось поверх консоли; дальше он закрывал бы браузер со страницей входа в GitHub
         $win.Topmost = $false; [void]$win.Activate()
         Select-Nav $ctl.Nav.SelectedItem
+        Update-HostChips
+        # консоль setup.ps1 не нужна: окно — единственный интерфейс (setup.ps1 -Console её оставляет)
+        if ($RunInWindow) { [PcBase.Native]::ShowConsole($false) }
         Start-FilesJob
+        Start-StatusJob
+        Start-EngineCheck
+        $themeTimer.Start()
         if (Initialize-DataLayout) { Start-DataJob 'push' }
     })
 
-    if (-not $win.ShowDialog()) { return $null }
-
+    $closedOk = $win.ShowDialog()
+    if ($RunInWindow) { [PcBase.Native]::ShowConsole($true); return @{ RanInWindow = $true; Ran = [bool]$ui.Ran } }
+    if (-not $closedOk) { return $null }
     $out = $ui.Result
-    $out.FileTitles = @($out.Files | ForEach-Object { $f = $_; $t = @($items | Where-Object { $_.Kind -eq 'file' -and $_.Id -eq $f } | ForEach-Object { $_.Name }); if ($t) { $t[0] } else { $f } })
-    $out.Name = if ($ui.Name) { $ui.Name.ToUpper() } else { $null }
     $out.DryRun = [bool]$ctl.ModePlan.IsChecked
     return $out
 }

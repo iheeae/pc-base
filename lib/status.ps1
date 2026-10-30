@@ -11,7 +11,7 @@ function Get-PbUninstallEntries {
             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
     @(Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.SystemComponent -ne 1 } |
-        ForEach-Object { @{ Name = [string]$_.DisplayName; Version = [string]$_.DisplayVersion } })
+        ForEach-Object { @{ Name = [string]$_.DisplayName; Version = [string]$_.DisplayVersion; Icon = [string]$_.DisplayIcon } })
 }
 
 # запись реестра для программы каталога: по Detect (как у web-установки) или по началу названия
@@ -46,8 +46,16 @@ function Get-PbWingetInstalled {
     return (ConvertFrom-PbWingetList $r.Out)
 }
 
-# @{ Kind = installed | update | missing | unknown; Text; Version; Available }. $Winget = $null — winget ещё не ответил
+# @{ Kind = installed | update | missing | unknown; Text; Version; Available; Icon (DisplayIcon из реестра) }.
+# $Winget = $null — winget ещё не ответил
 function Get-PbAppStatus ($App, $Entries, $Winget) {
+    $st = Get-PbAppStatusCore $App $Entries $Winget
+    $reg = Find-PbUninstallEntry $App $Entries
+    if ($reg -and $reg.Icon -and $st.Kind -in 'installed', 'update') { $st.Icon = $reg.Icon }
+    return $st
+}
+
+function Get-PbAppStatusCore ($App, $Entries, $Winget) {
     $reg = Find-PbUninstallEntry $App $Entries
     $w = $null
     if ($Winget -and $App.WingetId) { $w = $Winget[$App.WingetId.ToLower()] }

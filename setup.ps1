@@ -13,13 +13,15 @@
 #   -NoPull                 не подтягивать свежую версию из git
 #   -DryRun                 открыть окно в режиме «только показать план» (он и так по умолчанию)
 #   -DataRoot <папка>       где лежат свои данные, если не в C:\tabula-rasa-private
+#   -Console                план и прогон — в консоли, как раньше (для отладки); по умолчанию — в окне, консоль скрыта
 
 [CmdletBinding()]
 param(
     [string]$Selection,
     [switch]$NoPull,
     [switch]$DryRun,
-    [string]$DataRoot
+    [string]$DataRoot,
+    [switch]$Console
 )
 
 $ErrorActionPreference = 'Continue'   # Stop ломает нативные команды в PS 5.1; где надо — -ErrorAction Stop явно
@@ -35,6 +37,7 @@ if (-not $isAdmin -or -not $isSta) {
     if ($Selection) { $argList += @('-Selection', "`"$Selection`"") }
     if ($NoPull) { $argList += '-NoPull' }
     if ($DryRun) { $argList += '-DryRun' }
+    if ($Console) { $argList += '-Console' }
     if ($DataRoot) { $argList += @('-DataRoot', "`"$DataRoot`"") }
     if ($isAdmin) { Start-Process powershell.exe -ArgumentList $argList }
     else { Start-Process powershell.exe -Verb RunAs -ArgumentList $argList }
@@ -90,6 +93,7 @@ if (-not $NoPull -and -not $engineSynced -and (Get-Command git -ErrorAction Sile
                     $relaunch = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath)
                     if ($Selection) { $relaunch += @('-Selection', $Selection) }
                     if ($DryRun) { $relaunch += '-DryRun' }
+                    if ($Console) { $relaunch += '-Console' }
                     if ($DataRoot) { $relaunch += @('-DataRoot', $DataRoot) }
                     & powershell.exe @relaunch
                     exit $LASTEXITCODE
@@ -106,6 +110,7 @@ $script:PB.Root = $PSScriptRoot
 if ($DataRoot) { $script:PB.DataRoot = $DataRoot }
 $EngineRepo = 'iheeae/tabula-rasa'
 $startNotices = @($preNotices)
+$windowMode = $false
 
 # загрузчик в отдельном окне: переносит или заново клонирует папку движка. Сами выходим сразу, чтобы не держать её
 function Start-PbBootstrap {
@@ -226,101 +231,25 @@ try {
         if ($p) { $initial = Read-SaveFile $p } else { Write-Warn2 "Сохранение не найдено: $Selection" }
     }
     # список файлов окно получает само, в фоне: из релиза files «Моих данных»
-    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain
+    $sel = Show-SelectionDialog -Apps $Apps -Tweaks $Tweaks -Initial $initial -Notices $startNotices -DryRun $true -IsDomain $script:PB.IsDomain -RunInWindow (-not $Console)
     if ($script:PB.WindowShownSec) { Write-Host "  Окно открылось через $($script:PB.WindowShownSec) с после запуска." -ForegroundColor DarkGray }
+    # план, прогон и итог прошли в окне (lib\gui.ps1 + lib\run.ps1): журнал прогона — logs\run_<дата>.log
+    if ($sel -and $sel.RanInWindow) { $windowMode = $true; return }
     if (-not $sel) { Write-Host '  Отменено.'; return }
-    $DryRun = $sel.DryRun
-    $newName = $sel.Name
 
-    $selApps = @($Apps | Where-Object { $sel.Apps -contains $_.Id })
-    $selCfg = @($Apps | Where-Object { $_.Config -and $_.Config.Import -and $sel.Configs -contains $_.Id })
-    $preTw = @($Tweaks | Where-Object { $_.Phase -ne 'post' -and $sel.Tweaks -contains $_.Id })
-    $postTw = @($Tweaks | Where-Object { $_.Phase -eq 'post' -and $sel.Tweaks -contains $_.Id })
-
-    if ($DryRun) {
-        Write-Step 'Будет сделано'
-        $preTw | ForEach-Object { Write-Host "    твик:      $($_.Name)$(if ($_.Irreversible) { '   [необратимо]' })" }
-        $selApps | ForEach-Object { Write-Host "    программа: $($_.Name) [$($_.Source)]" }
-        $selCfg | ForEach-Object { Write-Host "    настройки: $($_.Name) — с моими настройками" }
-        $sel.FileTitles | ForEach-Object { Write-Host "    файл:      $_" }
-        $postTw | ForEach-Object { Write-Host "    после:     $($_.Name)" }
-        if ($newName) { Write-Host "    имя:       $newName" }
+    # -Console: тот же план и прогон (lib\run.ps1), вывод — в консоль
+    $plan = Get-PbRunPlan $sel $Apps $Tweaks $null
+    if ($sel.DryRun) {
+        Write-PbPlan $plan
         Write-Host ''
         Write-Host '  Показан только план, изменения не вносились. Чтобы применить их, выберите внизу окна режим «Применить».' -ForegroundColor Yellow
         return
     }
-
-    # ---------- точка восстановления ----------
-    Write-Step 'Точка восстановления'
-    try {
-        Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
-        Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' 'SystemRestorePointCreationFrequency' 0
-        Checkpoint-Computer -Description "tabula-rasa $($script:PB.Stamp)" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
-        Write-Ok 'создана'
-    } catch {
-        Write-Warn2 "не создана: $($_.Exception.Message)"
-        # без точки восстановления необратимое уже ничем не отменить — спросить, а не молча выполнить
-        $irr = @($preTw | Where-Object { $_.Irreversible })
-        if ($irr.Count) {
-            Write-Host '    Без точки восстановления эти изменения отменить будет невозможно:' -ForegroundColor Yellow
-            $irr | ForEach-Object { Write-Host "      - $($_.Name)" -ForegroundColor Yellow }
-            if ((Read-Host '    Выполнить их без точки восстановления? [y/N]') -notmatch '^[yYнН]') {
-                $preTw = @($preTw | Where-Object { -not $_.Irreversible })
-                $irr | ForEach-Object { Add-Result $_.Name 'пропущено' 'нет точки восстановления' }
-            }
-        }
-    }
-
-    # ---------- 2. настройки ----------
-    if ($preTw) { Write-Step 'Настройки Windows'; foreach ($t in $preTw) { Invoke-Tweak $t } }
-
-    # ---------- 3. программы ----------
-    if ($selApps) {
-        Write-Step 'Программы'
-        if (-not (Initialize-Winget)) { Write-Fail 'Без winget программы из каталога установить невозможно' }
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            [void](Invoke-PbWingetTimed @('source', 'update', '--name', 'winget') 5 'source_update')
-        }
-        foreach ($a in $selApps) {
-            if ($a.Source -eq 'winget' -and -not (Get-Command winget -ErrorAction SilentlyContinue)) {
-                Add-Result $a.Name 'ОШИБКА' 'нет winget'; continue
-            }
-            Install-App $a
-        }
-        Update-SessionPath
-    }
-
-    # ---------- 3а. настройки программ ----------
-    if ($selCfg) {
-        Write-Step 'Настройки программ'
-        foreach ($a in $selCfg) {
-            Write-Host "  - $($a.Name): с моими настройками" -ForegroundColor White
-            try { & $a.Config.Import } catch { Write-Fail $_.Exception.Message; Add-Result "$($a.Name): мои настройки" 'ОШИБКА' $_.Exception.Message }
-        }
-    }
-
-    # ---------- 3б. файлы из «Моих данных» ----------
-    if ($sel.Files.Count) {
-        Write-Step 'Файлы из «Моих данных»'
-        Save-PbFiles -Names $sel.Files
-    }
-
-    # ---------- 4. среда ----------
-    if ($postTw) {
-        Write-Step 'Среда'
-        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { [void](Initialize-Winget) }
-        foreach ($t in $postTw) { Invoke-Tweak $t }
-    }
-
-    # ---------- 5. имя ПК ----------
-    if ($newName -and $newName -ne $env:COMPUTERNAME) {
-        try { Rename-Computer -NewName $newName -Force -ErrorAction Stop; $script:PB.NeedReboot = $true; Add-Result "Имя компьютера → $newName" 'применено' }
-        catch { Add-Result "Имя компьютера → $newName" 'ОШИБКА' $_.Exception.Message }
-    }
-
-    if ($script:PB.NeedExplorerRestart) { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue }
+    Invoke-PbRun $plan $sel $Apps $Tweaks $null
 }
 finally {
+  if ($windowMode) { Stop-Transcript | Out-Null }
+  else {
     $changesFile = $null
     if ($script:PB.Changes.Count) { $changesFile = Save-Changes }
 
@@ -345,4 +274,5 @@ finally {
     } else {
         Read-Host '  Готово. Enter — закрыть' | Out-Null
     }
+  }
 }
