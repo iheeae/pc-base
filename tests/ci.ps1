@@ -86,3 +86,4 @@ if ($env:OS -eq 'Windows_NT') {
 Write-Host ''
 if ($script:Fails) { Write-Host "Не пройдено проверок: $($script:Fails)" -ForegroundColor Red; exit 1 }
 Write-Host 'Все проверки пройдены' -ForegroundColor Green
+exit 0   # иначе остаётся $LASTEXITCODE последней внешней команды из проверок

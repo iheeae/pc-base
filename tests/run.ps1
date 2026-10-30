@@ -521,3 +521,4 @@ try {
 Write-Host ''
 if ($script:Fails) { Write-Host "Ошибок: $($script:Fails) из $($script:Count)" -ForegroundColor Red; exit 1 }
 Write-Host "Все проверки пройдены: $($script:Count)" -ForegroundColor Green
+exit 0   # иначе остаётся $LASTEXITCODE последней внешней команды из проверок
