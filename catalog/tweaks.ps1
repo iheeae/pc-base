@@ -8,6 +8,9 @@
 #                Disable-Task, тогда изменения попадут в журнал и откатятся через undo.ps1.
 # Manual       — что сделать вручную, попадёт в итоговый список.
 # Desc         — что именно меняется; показывается в окне.
+# Check        — только если Apply делает что-то кроме Set-Reg / Set-SvcStart / Disable-Task / Remove-Appx: проверка
+#                «уже применено» без изменений, возвращает $true/$false. Остальные твики проверяются сами (CheckOnly);
+#                без Check и с другими командами в Apply — статус «не проверяется»
 
 $Adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
 
@@ -184,6 +187,7 @@ $Tweaks = @(
        } }
 
     @{ Id = 'bloat.onedrive'; Irreversible = $true; Name = 'Удалить OneDrive'; Desc = 'Удаляет OneDrive и скрывает его в Проводнике. Пропускается, если Рабочий стол или Документы перенесены в OneDrive.'; Group = 'Мусор'; Os = @('10', '11'); Phase = 'pre'
+       Check = { -not (Test-Path (Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\OneDrive.exe')) -and -not (Test-Path (Join-Path $env:ProgramFiles 'Microsoft OneDrive\OneDrive.exe')) }
        Apply = {
            $usf = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction SilentlyContinue
            if (@($usf.Desktop, $usf.Personal, $usf.'My Pictures') -match 'OneDrive') {
@@ -202,6 +206,7 @@ $Tweaks = @(
     # ============================== Система ==============================
 
     @{ Id = 'sys.wsl'; Name = 'WSL2 и платформа виртуальных машин (для Docker)'; Desc = 'Включает WSL и платформу виртуальных машин, устанавливает ядро WSL2 (требуется для Docker). Потребуется перезагрузка.'; Group = 'Система'; Os = @('10', '11'); Phase = 'pre'
+       Check = { @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform' | ForEach-Object { (Get-WindowsOptionalFeature -Online -FeatureName $_ -ErrorAction Stop).State } | Where-Object { $_ -ne 'Enabled' }).Count -eq 0 }
        Apply = {
            foreach ($f in 'Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform') {
                $st = (Get-WindowsOptionalFeature -Online -FeatureName $f).State
@@ -229,6 +234,7 @@ $Tweaks = @(
        } }
 
     @{ Id = 'sys.highperf'; Name = 'Схема электропитания «Высокая производительность» (кроме ноутбуков)'; Desc = 'Включает схему электропитания «Высокая производительность». На ноутбуках пропускается.'; Group = 'Система'; Os = @('10', '11'); Phase = 'pre'
+       Check = { [string](& powercfg.exe /getactivescheme) -match '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' }   # SCHEME_MIN
        Apply = {
            if ($script:PB.IsLaptop) { Write-Warn2 'ноутбук, пропущено'; return }
            $old = $null
@@ -238,6 +244,7 @@ $Tweaks = @(
        } }
 
     @{ Id = 'sys.nohiber'; Name = 'Отключить гибернацию и быстрый запуск'; Desc = 'Отключает гибернацию (файл hiberfil.sys занимает несколько гигабайт) и быстрый запуск. Спящий режим сохраняется.'; Group = 'Система'; Os = @('10', '11'); Phase = 'pre'
+       Check = { (Get-PbRegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled').Value -eq 0 }
        Apply = {
            $v = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name HibernateEnabled -ErrorAction SilentlyContinue).HibernateEnabled
            & powercfg.exe /hibernate off

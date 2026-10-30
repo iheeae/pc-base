@@ -122,15 +122,16 @@ function ConvertFrom-PbWingetTable ([string[]]$Lines) {
     $rows = for ($r = $dash + 1; $r -lt $clean.Count; $r++) {
         $l = $clean[$r]
         if (-not $l.Trim()) { break }
-        $cols = for ($c = 0; $c -lt 3; $c++) {
-            $a = $starts[$c]; $b = $starts[$c + 1]
+        $cols = @(for ($c = 0; $c -lt $starts.Count; $c++) {
+            $a = $starts[$c]
+            $b = if ($c + 1 -lt $starts.Count) { $starts[$c + 1] } else { $l.Length }   # последняя колонка — до конца строки
             if ($a -ge $l.Length) { ''; continue }
             if ($b -gt $l.Length) { $b = $l.Length }
             $l.Substring($a, $b - $a).Trim()
-        }
+        })
         $name = $cols[0]; $id = $cols[1]; $ver = $cols[2]
         if (-not $id -or $id -match '…' -or $id -notmatch '^[\w.+-]+$') { continue }
-        [pscustomobject]@{ Name = $name; Id = $id; Version = $ver }
+        [pscustomobject]@{ Name = $name; Id = $id; Version = $ver; Cols = $cols }
     }
     return @($rows)
 }
