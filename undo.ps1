@@ -22,7 +22,7 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
 if (-not $File) { $File = @(Get-PbChangeLogs | ForEach-Object { $_.Path }) | Select-Object -First 1 }
 if (-not $File -or -not (Test-Path $File)) { Write-Fail 'Журнал изменений не найден'; Read-Host '  Enter — закрыть' | Out-Null; return }
 
-$count = @(Get-Content $File -Raw -Encoding UTF8 | ConvertFrom-Json).Count
+$count = @(Get-Content $File -Raw -Encoding UTF8 | ConvertFrom-Json | ForEach-Object { $_ }).Count
 Write-Step "Откат по журналу $File (записей: $count)"
 if ((Read-Host '  Выполнить откат? [y/N]') -notmatch '^[yYнН]') { return }
 foreach ($r in (Invoke-PbUndo $File)) { if ($r.Ok) { Write-Ok $r.Text } else { Write-Fail $r.Text } }

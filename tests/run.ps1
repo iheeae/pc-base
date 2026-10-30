@@ -132,7 +132,7 @@ try {
             $cap = @(Get-PbCaptureApps $catalog)
             Check 'вкладка: 19 программ, на «компьютере» есть Git и Vivaldi' ($cap.Count -eq 19 -and (($cap | Where-Object Installed | ForEach-Object { $_.App.Id }) -join ',') -eq 'git,vivaldi') ($cap | ForEach-Object { "$($_.App.Id)=$($_.Installed)" })
             $res = @(Invoke-PbCapture @($catalog | Where-Object { $_.Id -eq 'vivaldi' }) $stage)
-            $v = Get-Content (Join-Path $stage $res[0].Files[0]) -Raw | ConvertFrom-Json
+            $v = Get-Content (Join-Path $stage $res[0].Files[0]) -Raw -Encoding UTF8 | ConvertFrom-Json
             Check 'vivaldi: тема и вкладки есть, sync и mail вырезаны, profile не взят' ($v.vivaldi.theme.current -eq 'dark' -and $v.vivaldi.tabs.stack -and -not $v.vivaldi.sync -and -not $v.vivaldi.mail -and -not $v.profile -and $res[0].Removed.Count -eq 2) @($v, $res[0].Removed)
         } finally { $env:LOCALAPPDATA = $oldLa }
         Check '{MyDocuments} раскрывается' ((Expand-PbPath '{MyDocuments}\x') -eq ([Environment]::GetFolderPath('MyDocuments') + [IO.Path]::DirectorySeparatorChar + 'x'))
@@ -169,7 +169,7 @@ try {
         [IO.File]::WriteAllText((Join-Path (Join-Path (Join-Path $ws 'profiles') 'Work') 'recent_common'), "x`n")
         $st2 = Join-Path $tmp 'stage2'
         $res = @(Invoke-PbCapture @(@{ Id = 'wireshark'; Name = 'Wireshark'; Config = @{ Export = 'Export-WiresharkConfig' } }) $st2)
-        $prefs = Get-Content (Join-Path $st2 (Join-Path 'wireshark' 'preferences')) -Raw
+        $prefs = Get-Content (Join-Path $st2 (Join-Path 'wireshark' 'preferences')) -Raw -Encoding UTF8
         Check 'wireshark: recent не взяты, профиль взят' (-not $res[0].Error -and $res[0].Files.Count -eq 2 -and -not ($res[0].Files -match 'recent')) $res[0]
         Check 'wireshark: путь профиля заменён на %USERPROFILE%' ($prefs -match '%USERPROFILE%' -and $prefs -notmatch [regex]::Escape($env:USERPROFILE)) $prefs
         $u16 = Join-Path $tmp 'u16.txt'
@@ -183,19 +183,19 @@ try {
         Copy-PbCapture $st2 $res[0].Files (Join-Path $script:PB.DataRoot 'configs')
         Remove-Item $ws -Recurse -Force
         Set-WiresharkConfig | Out-Null
-        $back = Get-Content (Join-Path $ws 'preferences') -Raw
+        $back = Get-Content (Join-Path $ws 'preferences') -Raw -Encoding UTF8
         Check 'wireshark: применение раскрыло путь' ($back -match [regex]::Escape((Join-Path $env:USERPROFILE 'caps'))) $back
 
         # KeePassXC: пути к базам и Last… вырезаются; SumatraPDF: блоки FileStates и SessionData
         $kp = Join-Path $env:APPDATA 'KeePassXC'; New-Item -ItemType Directory -Path $kp -Force | Out-Null
         Write-PbText (Join-Path $kp 'keepassxc.ini') @('[General]', 'ConfigVersion=2', 'LastDatabases=C:/db.kdbx', 'LastKeyFiles=@Variant(x)', 'LastDir=C:/x', '[Security]', 'LockDatabaseIdle=true')
         $res = @(Invoke-PbCapture @(@{ Id = 'keepassxc'; Name = 'KeePassXC'; Config = @{ Export = 'Export-KeePassXCConfig' } }) $st2)
-        $ini = @(Get-Content (Join-Path $st2 $res[0].Files[0]))
+        $ini = @(Get-Content (Join-Path $st2 $res[0].Files[0]) -Encoding UTF8)
         Check 'keepassxc: Last… вырезаны' (($ini -join '|') -eq '[General]|ConfigVersion=2|[Security]|LockDatabaseIdle=true' -and $res[0].Removed.Count -eq 3) $ini
         $su = Join-Path $env:LOCALAPPDATA 'SumatraPDF'; New-Item -ItemType Directory -Path $su -Force | Out-Null
         Write-PbText (Join-Path $su 'SumatraPDF-settings.txt') @('Theme = Dark', 'FileStates [', '  [', '    FilePath = C:\doc.pdf', '  ]', ']', 'SessionData [', ']', 'ZoomDefault = fit page', 'TimeOfLastUpdateCheck = 0 0')
         $res = @(Invoke-PbCapture @(@{ Id = 'sumatra'; Name = 'SumatraPDF'; Config = @{ Export = 'Export-SumatraConfig' } }) $st2)
-        $su2 = @(Get-Content (Join-Path $st2 $res[0].Files[0]))
+        $su2 = @(Get-Content (Join-Path $st2 $res[0].Files[0]) -Encoding UTF8)
         Check 'sumatra: без FileStates, SessionData и служебного' (($su2 -join '|') -eq 'Theme = Dark|ZoomDefault = fit page') $su2
 
         # реестр: JSON → Set-Reg (подменён: в тестах реестр не трогаем), вырезанное фильтром не пишется
@@ -228,7 +228,7 @@ try {
     Install-PbDataLayout $plan
     $files = @((Invoke-PbGit ls-files).Out)
     Check 'разметка: все файлы одним коммитом' ((Get-PbDataLayout) -eq 'ok' -and $files -contains 'tabula-rasa.json' -and $files -contains 'catalog/apps.psd1' -and $files -contains 'saves/.gitkeep' -and $files -contains '.gitignore' -and @((Invoke-PbGit log --oneline).Out).Count -eq 2) $files
-    Check 'README заменён' ((Get-Content (Join-Path $script:PB.DataRoot 'README.md') -Raw) -match 'Мои данные Tabula Rasa')
+    Check 'README заменён' ((Get-Content (Join-Path $script:PB.DataRoot 'README.md') -Raw -Encoding UTF8) -match 'Мои данные Tabula Rasa')
     Check 'пустой каталог читается' ((Read-PbUserCatalog @()).Errors.Count -eq 0)
     Check 'после разметки план пуст' (@(Get-PbLayoutPlan).Count -eq 0) (Get-PbLayoutPlan)
 
@@ -246,10 +246,10 @@ try {
     $rels = @($plan | ForEach-Object { $_.Rel })
     Check 'foreign: README и saves не трогаются' ($rels -notcontains 'README.md' -and $rels -notcontains 'saves/.gitkeep' -and $rels -contains 'configs/.gitkeep' -and $rels -contains 'catalog/apps.psd1') $rels
     Check 'foreign: .gitignore дополняется, *.log не повторяется' (($plan | Where-Object { $_.Rel -eq '.gitignore' }).Append -notcontains '*.log') $plan
-    $before = (Get-Content (Join-Path $r 'README.md') -Raw)
+    $before = (Get-Content (Join-Path $r 'README.md') -Raw -Encoding UTF8)
     Install-PbDataLayout $plan
     $gi = Get-Content (Join-Path $r '.gitignore') -Encoding UTF8
-    Check 'foreign: ничего не удалено и не перезаписано' ((Get-Content (Join-Path $r 'README.md') -Raw) -eq $before -and (Test-Path (Join-Path (Join-Path $r 'docs') 'plan.md')) -and $gi[0] -eq '*.log' -and $gi -contains '*.kdbx' -and (Get-PbDataLayout) -eq 'ok') $gi
+    Check 'foreign: ничего не удалено и не перезаписано' ((Get-Content (Join-Path $r 'README.md') -Raw -Encoding UTF8) -eq $before -and (Test-Path (Join-Path (Join-Path $r 'docs') 'plan.md')) -and $gi[0] -eq '*.log' -and $gi -contains '*.kdbx' -and (Get-PbDataLayout) -eq 'ok') $gi
 
     [IO.File]::WriteAllText((Join-Path $r 'tabula-rasa.json'), '{ "format": 99 }')
     Check 'манифест новее — только чтение' ((Get-PbDataLayout) -eq 'new' -and (Test-PbDataReadOnly))
@@ -264,18 +264,18 @@ try {
     Write-Host 'надёжность прогона'
     $script:PB.LogDir = Join-Path $tmp 'logs'
     $ps = (Get-Process -Id $PID).Path   # тот же PowerShell вместо winget: спит дольше лимита
-    $r = Invoke-PbWingetTimed @('-NoProfile', '-Command', 'Write-Output начало; Start-Sleep 60') 0.05 'test.slow' $ps
+    $r = Invoke-PbWingetTimed @('-NoProfile', '-Command', '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output начало; Start-Sleep 60') 0.05 'test.slow' $ps
     Check 'таймаут: процесс снят через ~3 с, кода нет' ($r.TimedOut -and $null -eq $r.Code -and $r.Seconds -lt 15) $r
-    Check 'таймаут: вывод в отдельном журнале' ((Get-Content $r.Log -Raw) -match 'начало') (Get-Content $r.Log -Raw)
-    $r = Invoke-PbWingetTimed @('-NoProfile', '-Command', 'Write-Output "с пробелом"; exit 7') 1 'test.code' $ps
-    Check 'код выхода и аргумент с пробелами' (-not $r.TimedOut -and $r.Code -eq 7 -and (Get-Content $r.Log -Raw) -match 'с пробелом') $r
+    Check 'таймаут: вывод в отдельном журнале' ((Get-Content $r.Log -Raw -Encoding UTF8) -match 'начало') (Get-Content $r.Log -Raw -Encoding UTF8)
+    $r = Invoke-PbWingetTimed @('-NoProfile', '-Command', '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output "с пробелом"; exit 7') 1 'test.code' $ps
+    Check 'код выхода и аргумент с пробелами' (-not $r.TimedOut -and $r.Code -eq 7 -and (Get-Content $r.Log -Raw -Encoding UTF8) -match 'с пробелом') $r
     Check 'вывод возвращается строками (для поиска)' (@($r.Out) -contains 'с пробелом') $r.Out
     Check 'коды winget: уже установлено, нет пакета, система не поддерживает' ((Get-PbWingetCodeInfo -1978335135).Ok -and -not (Get-PbWingetCodeInfo -1978335212).Ok -and
         (Get-PbWingetCodeInfo -1978334957).Text -match 'не поддерживает' -and (Get-PbWingetCodeInfo 5).Text -match '0x00000005')
     $script:PB.Changes.Clear()
     Add-PbChange ([ordered]@{ Kind = 'Reg'; Path = 'HKCU:\Software\X'; Name = 'A' })
     $j = Join-Path $script:PB.LogDir "changes_$($script:PB.Stamp).json"
-    Check 'журнал изменений пишется сразу, без конца прогона' ((Test-Path $j) -and (@(Get-Content $j -Raw | ConvertFrom-Json)).Count -eq 1)
+    Check 'журнал изменений пишется сразу, без конца прогона' ((Test-Path $j) -and (@(Get-Content $j -Raw -Encoding UTF8 | ConvertFrom-Json)).Count -eq 1)
     $mc = Join-Path $tmp 'modelcache'
     $probe = "`$ErrorActionPreference = 'Stop'; . '$((Join-Path (Join-Path $root 'lib') 'common.ps1'))'; `$script:PbUiDir = '$((Join-Path (Join-Path $root 'lib') 'ui'))'; " +
         "`$a = [Management.Automation.Language.Parser]::ParseFile('$((Join-Path (Join-Path $root 'lib') 'gui.ps1'))', [ref]`$null, [ref]`$null); " +
@@ -458,7 +458,7 @@ try {
     Check 'прогон: без точки восстановления необратимое снято, ошибка и пропуск видны' ($states -eq 'restore=skip tweak:p.a=done tweak:p.irr=skip app:a1=done app:a2=error app:a3=done config:a3=skip files=done tweak:p.post=done rename=done') $states
     Check 'прогон: спросили про необратимое, итог и флаги' (($script:Asked -join ',') -eq 'Удалить X' -and $sync.Done -and $sync.NeedReboot -and ($plan | Where-Object Key -eq 'app:a2').Detail -match 'подпись' -and $script:PB.Upgrades -contains 'a1') $sync
     $rep = [string]$sync.Report
-    $html = if ($rep -and (Test-Path $rep)) { Get-Content $rep -Raw -Encoding UTF8 } else { '' }
+    $html = if ($rep -and (Test-Path $rep)) { Get-Content $rep -Encoding UTF8 -Raw -Encoding UTF8 } else { '' }
     Check 'отчёт: в папке отчётов и копия в журналах' ($rep -like (Join-Path (Join-Path $tmp 'reports') 'report_*.html') -and
         (Test-Path (Join-Path $script:PB.LogDir (Split-Path $rep -Leaf)))) $rep
     $failBlock = if ($html -match '(?s)Что не получилось(.*?)</div>') { $Matches[1] } else { '' }
