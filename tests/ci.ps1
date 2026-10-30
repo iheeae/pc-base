@@ -10,7 +10,10 @@ Set-Location $root
 $script:Fails = 0
 function Report ([string]$Name, [string[]]$Bad) {
     $Bad = @($Bad | Where-Object { $_ })
-    if ($Bad.Count) { $script:Fails++; Write-Host "FAIL $Name" -ForegroundColor Red; $Bad | Select-Object -First 30 | ForEach-Object { Write-Host "     $_" } }
+    if ($Bad.Count) {
+        $script:Fails++; Write-Host "FAIL $Name" -ForegroundColor Red; $Bad | Select-Object -First 30 | ForEach-Object { Write-Host "     $_" }
+        if ($env:GITHUB_ACTIONS) { Write-Host "::error title=tests/ci.ps1::$Name — $((@($Bad) | Select-Object -First 5) -join '; ')" }
+    }
     else { Write-Host "ok   $Name" -ForegroundColor Green }
 }
 $files = @(& git ls-files)

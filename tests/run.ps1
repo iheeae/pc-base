@@ -12,7 +12,11 @@ $script:Fails = 0; $script:Count = 0
 function Check ([string]$Name, [bool]$Ok, $Got) {
     $script:Count++
     if ($Ok) { Write-Host "  ok   $Name" -ForegroundColor Green }
-    else { $script:Fails++; Write-Host "  FAIL $Name$(if ($null -ne $Got) { " — получено: $($Got | Out-String -Width 200)".TrimEnd() })" -ForegroundColor Red }
+    else {
+        $script:Fails++; Write-Host "  FAIL $Name$(if ($null -ne $Got) { " — получено: $($Got | Out-String -Width 200)".TrimEnd() })" -ForegroundColor Red
+        # в GitHub Actions — аннотация: видна в сводке прогона без чтения журнала
+        if ($env:GITHUB_ACTIONS) { Write-Host "::error title=tests/run.ps1::$Name$(if ($null -ne $Got) { ' — получено: ' + (($Got | Out-String -Width 200) -replace '\r?\n', ' ').Trim() })" }
+    }
 }
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("tabula-rasa-tests-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -507,6 +511,9 @@ try {
     Check 'транслит' ((ConvertTo-PbAssetName 'Отчёт 2024 (итог).pdf') -eq 'Otchet_2024_itog.pdf')
     Check 'заглавные слова' ((ConvertTo-PbAssetName 'ЩУКА.exe') -eq 'SHCHUKA.exe')
     Check 'пустое имя' ((ConvertTo-PbAssetName '日本語.txt') -eq 'file.txt')
+} catch {
+    if ($env:GITHUB_ACTIONS) { Write-Host "::error title=tests/run.ps1::$($_.Exception.Message) @ $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)" }
+    throw
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

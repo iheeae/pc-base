@@ -22,7 +22,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Проверки из CLAUDE.md (Windows PowerShell 5.1)
         shell: powershell
         run: ./tests/ci.ps1
@@ -48,7 +48,7 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: WingetId каталога есть в источнике winget
         shell: pwsh
         env:
