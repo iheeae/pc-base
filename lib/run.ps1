@@ -232,7 +232,7 @@ function Get-PbChangeLogs {
     @(@($script:PB.LogDir, (Join-Path $script:PbLegacy.Program 'logs')) | Where-Object { Test-Path $_ } |
         ForEach-Object { Get-ChildItem $_ -Filter 'changes_*.json' -ErrorAction SilentlyContinue } |
         Sort-Object Name -Descending | ForEach-Object {
-            $n = 0; try { $n = @(Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json).Count } catch { }
+            $n = 0; try { $n = @(Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json | ForEach-Object { $_ }).Count } catch { }
             $d = $_.LastWriteTime
             if ($_.BaseName -match '(\d{4}-\d\d-\d\d)_(\d\d)(\d\d)(\d\d)$') { try { $d = [datetime]::ParseExact("$($Matches[1]) $($Matches[2]):$($Matches[3]):$($Matches[4])", 'yyyy-MM-dd HH:mm:ss', $null) } catch { } }
             @{ Path = $_.FullName; Date = $d; Count = $n }
@@ -241,7 +241,8 @@ function Get-PbChangeLogs {
 
 # откат одного журнала в обратном порядке; строки результата — @{ Ok; Text }
 function Invoke-PbUndo ([string]$File) {
-    $changes = @(Get-Content $File -Raw -Encoding UTF8 | ConvertFrom-Json)
+    # | ForEach-Object: в 5.1 ConvertFrom-Json отдаёт JSON-массив одним объектом, @() дал бы массив из одного массива
+    $changes = @(Get-Content $File -Raw -Encoding UTF8 | ConvertFrom-Json | ForEach-Object { $_ })
     [array]::Reverse($changes)
     foreach ($c in $changes) {
         try {
