@@ -1797,7 +1797,8 @@ function Show-SelectionDialog {
         $ctl.RunTitle.Text = 'План'
         $irr = @($plan | Where-Object { $_.Irreversible }).Count
         $skip = @($plan | Where-Object { $_.Note -match 'пропущено' }).Count
-        $ctl.RunHint.Text = "Шагов: $($plan.Count)$(if ($skip) { ", будет пропущено: $skip" })$(if ($irr) { ", необратимых: $irr" }). Изменения пока не вносились."
+        $sum = Get-PbPlanSummary $plan
+        $ctl.RunHint.Text = "Шагов: $($plan.Count)$(if ($skip) { ", будет пропущено: $skip" })$(if ($irr) { ", необратимых: $irr" })$(if ($sum) { "; $sum" }). Изменения пока не вносились."
         $ctl.RunProgress.Visibility = 'Collapsed'; $ctl.RunBanner.Visibility = 'Collapsed'; $ctl.ManualBox.Visibility = 'Collapsed'
         $ctl.RunStatus.Text = 'Чтобы выполнить план, нажмите «Применить…».'
         Set-RunButtons 'plan'
@@ -1864,7 +1865,7 @@ function Show-SelectionDialog {
                 $v = $runSteps[$i]; $i++
                 if ($v.State -ne $p.State) { $v.State = $p.State }
                 if ($v.Detail -ne $p.Detail) { $v.Detail = $p.Detail }
-                if ($p.State -in 'done', 'skip', 'error') { $done++ } elseif ($p.State -eq 'run') { $cur = $p }
+                if ($p.State -in 'done', 'same', 'skip', 'error') { $done++ } elseif ($p.State -eq 'run') { $cur = $p }
             }
             $total = [Math]::Max(1, $runSteps.Count)
             $ctl.RunProgress.Value = $done / $total
@@ -1894,7 +1895,8 @@ function Show-SelectionDialog {
         $bad = @($runSteps | Where-Object { $_.State -eq 'error' }).Count
         $skip = @($runSteps | Where-Object { $_.State -eq 'skip' }).Count
         $ctl.RunTitle.Text = if ($Err) { 'Прогон прерван' } elseif ($bad) { "Готово, ошибок: $bad" } else { 'Готово' }
-        $ctl.RunHint.Text = "Выполнено шагов: $(@($runSteps | Where-Object { $_.State -eq 'done' }).Count) из $($runSteps.Count)$(if ($skip) { ", пропущено: $skip" })$(if ($bad) { ", с ошибкой: $bad" }). Журналы: $($script:PB.LogDir)."
+        $same = @($runSteps | Where-Object { $_.State -eq 'same' }).Count
+        $ctl.RunHint.Text = "Выполнено шагов: $(@($runSteps | Where-Object { $_.State -eq 'done' }).Count) из $($runSteps.Count)$(if ($same) { ", уже было настроено: $same" })$(if ($skip) { ", пропущено: $skip" })$(if ($bad) { ", с ошибкой: $bad" }). Журналы: $($script:PB.LogDir)."
         if ($Err) { $ctl.RunHint.Text += " Прогон прерван: $Err" }
         $ctl.RunProgress.Value = 1
         $win.TaskbarItemInfo.ProgressState = if ($bad -or $Err) { 'Error' } else { 'None' }

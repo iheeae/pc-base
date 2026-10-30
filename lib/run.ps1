@@ -1,7 +1,9 @@
 ﻿# Tabula Rasa: план и прогон. Один список шагов (Get-PbRunPlan) — и экран плана, и экран прогона в окне,
 # и вывод в консоль (setup.ps1 -Console).
 #
-# Шаг: @{ Key; Phase (1–7); PhaseName; Kind; Name; Ref; State = wait|run|done|skip|error; Detail; Note; Irreversible }.
+# Шаг: @{ Key; Phase (1–7); PhaseName; Kind; Name; Ref; State = wait|run|done|same|skip|error; Detail; Note; Irreversible;
+#        Already (статус твика до прогона: applied|partial|no|unknown); Actions (действия «было → стало», Add-PbAction) }.
+# same — «уже было»: всё нужное уже стояло, ничего не менялось.
 # Invoke-PbRun выполняет шаги по порядку. Из окна — в фоновом runspace с общим $Sync: State/Detail шагов,
 # $Sync.SkipCurrent (снять текущий), $Sync.StopAfter (остановить после текущего), вопросы — $Sync.Ask / $Sync.Answer
 # вместо Read-Host. Без $Sync — как раньше, в консоли. В конце — отчёт (lib\report.ps1), путь — $Sync.Report / $script:PB.Report.
@@ -16,11 +18,12 @@ $script:PbPhases = @{
 
 function New-PbStep ([int]$Phase, [string]$Kind, [string]$Key, [string]$Name, $Ref) {
     return [hashtable]::Synchronized(@{ Key = $Key; Phase = $Phase; PhaseName = $script:PbPhases[$Phase]; Kind = $Kind; Name = $Name; Ref = $Ref
-        State = 'wait'; Detail = ''; Note = ''; Irreversible = $false })
+        State = 'wait'; Detail = ''; Note = ''; Irreversible = $false; Already = $null; Actions = @() })
 }
 
 # $Sel — выбор окна (Apps, Configs, Tweaks, Files, FileTitles, Name, Upgrades); $Status — статусы окна (необязательно):
-# @{ Apps = @{ id = @{ Kind } }; Tweaks = @{ id = 'applied' } } — только для пометок «будет пропущено»
+# @{ Apps = @{ id = @{ Kind } }; Tweaks = @{ id = 'applied' } } — для пометок «будет пропущено». Твики, статуса которых
+# нет (окно ещё не проверило, -Console), проверяются здесь же (Get-PbTweakStatus — только чтение)
 function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
     $plan = New-Object System.Collections.ArrayList
     $pre = @($Tweaks | Where-Object { $_.Phase -ne 'post' -and $Sel.Tweaks -contains $_.Id })
@@ -31,13 +34,7 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
     if (-not $any) { return , $plan }
 
     [void]$plan.Add((New-PbStep 1 'restore' 'restore' 'Создать точку восстановления' $null))
-    foreach ($t in $pre) {
-        $s = New-PbStep 2 'tweak' "tweak:$($t.Id)" $t.Name $t.Id
-        $s.Irreversible = [bool]$t.Irreversible
-        if ($s.Irreversible) { $s.Note = 'необратимо: отменяется только точкой восстановления' }
-        elseif ($Status -and $Status.Tweaks -and $Status.Tweaks[$t.Id] -eq 'applied') { $s.Note = 'уже применено: значения будут записаны повторно' }
-        [void]$plan.Add($s)
-    }
+    foreach ($t in $pre) { [void]$plan.Add((New-PbTweakStep 2 $t $Status)) }
     foreach ($a in $apps) {
         $s = New-PbStep 3 'app' "app:$($a.Id)" $a.Name $a.Id
         $st = if ($Status -and $Status.Apps) { $Status.Apps[$a.Id] } else { $null }
@@ -58,7 +55,7 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
         $s.Note = ($titles -join ', ')
         [void]$plan.Add($s)
     }
-    foreach ($t in $post) { [void]$plan.Add((New-PbStep 6 'tweak' "tweak:$($t.Id)" $t.Name $t.Id)) }
+    foreach ($t in $post) { [void]$plan.Add((New-PbTweakStep 6 $t $Status)) }
     if ($Sel.Name -and $Sel.Name -ne $env:COMPUTERNAME) {
         $s = New-PbStep 7 'rename' 'rename' "Имя компьютера: $env:COMPUTERNAME → $($Sel.Name)" $Sel.Name
         $s.Note = 'вступит в силу после перезагрузки'
@@ -67,8 +64,35 @@ function Get-PbRunPlan ($Sel, $Apps, $Tweaks, $Status) {
     return , $plan
 }
 
+# шаг твика с проверкой до прогона: уже применено — будет пропущено, частично — изменится только отличающееся
+function New-PbTweakStep ([int]$Phase, $T, $Status) {
+    $s = New-PbStep $Phase 'tweak' "tweak:$($T.Id)" $T.Name $T.Id
+    $s.Irreversible = [bool]$T.Irreversible
+    $st = $null
+    if ($Status -and $Status.Tweaks) { $st = $Status.Tweaks[$T.Id] }
+    if (-not $st -and (Get-Command Get-PbTweakStatus -ErrorAction SilentlyContinue)) { try { $st = Get-PbTweakStatus $T } catch { $st = 'unknown' } }
+    $s.Already = $st
+    if ($st -eq 'applied') { $s.Note = 'уже применено: будет пропущено' }
+    elseif ($st -eq 'partial') { $s.Note = 'применено частично: изменятся только отличающиеся значения' }
+    if ($s.Irreversible -and $st -ne 'applied') { $s.Note = (@($s.Note, 'необратимо: отменяется только точкой восстановления') | Where-Object { $_ }) -join '; ' }
+    return $s
+}
+
+# сводка плана для подсказки и консоли: «настройки Windows уже применены: 3 из 7»
+function Get-PbPlanSummary ($Plan) {
+    $tw = @($Plan | Where-Object { $_.Kind -eq 'tweak' })
+    if (-not $tw.Count) { return '' }
+    $done = @($tw | Where-Object { $_.Already -eq 'applied' }).Count
+    $part = @($tw | Where-Object { $_.Already -eq 'partial' }).Count
+    $t = "настройки Windows уже применены: $done из $($tw.Count)"
+    if ($part) { $t += ", частично: $part" }
+    return $t
+}
+
 # план текстом (setup.ps1 -Console и журнал)
 function Write-PbPlan ($Plan) {
+    $sum = Get-PbPlanSummary $Plan
+    if ($sum) { Write-Host "  План: $sum" -ForegroundColor Gray }
     $ph = 0
     foreach ($s in $Plan) {
         if ($s.Phase -ne $ph) { $ph = $s.Phase; Write-Step $s.PhaseName }
@@ -98,7 +122,10 @@ function Get-PbStepState ($Results) {
     if ($bad.Count) { return @{ State = 'error'; Detail = (@($bad | ForEach-Object { "$($_.'Статус'): $($_.'Детали')" }) -join '; ') } }
     $skip = @($r | Where-Object { $_.'Статус' -eq 'пропущено' })
     if ($skip.Count -and $skip.Count -eq $r.Count) { return @{ State = 'skip'; Detail = (@($skip | ForEach-Object { $_.'Детали' }) -join '; ') } }
-    return @{ State = 'done'; Detail = (@($r | ForEach-Object { $_.'Статус' } | Select-Object -Unique) -join ', ') }
+    $text = (@($r | ForEach-Object { @($_.'Статус', $_.'Детали' | Where-Object { $_ }) -join ', ' } | Select-Object -Unique) -join '; ')
+    # всё нужное уже было: ничего не менялось
+    if (-not @($r | Where-Object { $_.'Статус' -notin 'уже было', 'уже установлено' }).Count) { return @{ State = 'same'; Detail = $text } }
+    return @{ State = 'done'; Detail = $text }
 }
 
 # выполнить план. $Apps / $Tweaks — загруженные в этом же runspace (скриптблоки твиков привязаны к своему runspace)
@@ -119,6 +146,7 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
             if ($Sync) { $Sync.Current = $s.Key; $Sync.SkipCurrent = $false }
             $s.State = 'run'
             $mark = $script:PB.Results.Count
+            $actMark = $script:PB.Actions.Count
             try {
                 switch ($s.Kind) {
                     'restore' {
@@ -163,6 +191,7 @@ function Invoke-PbRun ($Plan, $Sel, $Apps, $Tweaks, $Sync) {
                 }
             } catch { Write-Fail $_.Exception.Message; Add-Result $s.Name 'ОШИБКА' $_.Exception.Message }
             $new = @($script:PB.Results | Select-Object -Skip $mark)
+            $s.Actions = @($script:PB.Actions | Select-Object -Skip $actMark)
             if ($Sync -and $Sync.SkipCurrent) { $s.State = 'skip'; $s.Detail = 'пропущено вручную' }
             elseif ($new.Count) { $st = Get-PbStepState $new; $s.State = $st.State; $s.Detail = $st.Detail }
             else { $s.State = 'done' }

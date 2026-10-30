@@ -19,6 +19,7 @@ $script:PB = [ordered]@{
     RunSync              = $null      # прогон из окна: общий с окном Synchronized-хеш (lib\run.ps1); в консоли — $null
     Upgrades             = @()        # id программ, для которых выбрано обновление (статус «есть обновление»)
     Report               = $null      # отчёт о последнем прогоне (lib\report.ps1)
+    Actions              = New-Object System.Collections.ArrayList   # действия прогона «было → стало» (Add-PbAction)
 }
 
 # ---------- переезд pc-base → Tabula Rasa ----------
@@ -114,7 +115,23 @@ function Update-SessionPath {
 
 # ---------- реестр, службы, задачи (всё пишется в журнал изменений для undo.ps1) ----------
 # В режиме $script:PB.CheckOnly эти функции ничего не меняют: сравнивают текущее с нужным (Add-PbCheck).
+# При применении — тоже сначала сравнивают: нужное значение уже стоит — ничего не меняется и в журнал изменений не
+# пишется («уже было»), иначе меняется и пишется. Каждое действие — в $script:PB.Actions (Add-PbAction): из него
+# Invoke-Tweak считает «уже было / применено / изменено N из M», а отчёт показывает «было → стало».
 # Чтение — отдельными функциями (Get-PbRegValue и др.), чтобы проверки можно было гонять без Windows (tests\run.ps1)
+
+# значение для отчёта: массив — через запятую, двоичное — первые байты в hex, нет значения — «нет»
+function Format-PbValue ($V) {
+    if ($null -eq $V) { return 'нет' }
+    if ($V -is [byte[]]) { $h = (@($V | Select-Object -First 16) | ForEach-Object { '{0:X2}' -f $_ }) -join ' '; if ($V.Count -gt 16) { $h += ' …' }; return $h }
+    if ($V -is [array]) { return (@($V) | ForEach-Object { [string]$_ }) -join ', ' }
+    return [string]$V
+}
+
+# действие прогона: Kind (Reg, Service, Task, Appx, App), Target, Old, New (текстом), Changed — было ли изменение
+function Add-PbAction ([string]$Kind, [string]$Target, $Old, $New, [bool]$Changed) {
+    [void]$script:PB.Actions.Add([ordered]@{ Kind = $Kind; Target = $Target; Old = (Format-PbValue $Old); New = (Format-PbValue $New); Changed = $Changed })
+}
 
 $script:PbCheck = @{ Total = 0; Ok = 0 }
 function Add-PbCheck ([bool]$Ok) { $script:PbCheck.Total++; if ($Ok) { $script:PbCheck.Ok++ } }
@@ -122,7 +139,7 @@ function Add-PbCheck ([bool]$Ok) { $script:PbCheck.Total++; if ($Ok) { $script:P
 function Get-PbRegValue ([string]$Path, [string]$Name) {
     try {
         $k = Get-Item -Path $Path -ErrorAction Stop
-        if ($k.GetValueNames() -contains $Name) { return @{ Exists = $true; Value = $k.GetValue($Name, $null, 'DoNotExpandEnvironmentNames') } }
+        if ($k.GetValueNames() -contains $Name) { return @{ Exists = $true; Value = $k.GetValue($Name, $null, 'DoNotExpandEnvironmentNames'); Kind = $k.GetValueKind($Name).ToString() } }
     } catch { }
     return @{ Exists = $false; Value = $null }
 }
@@ -167,55 +184,58 @@ function Set-Reg {
         [Parameter(Mandatory)]$Value,
         [ValidateSet('DWord', 'QWord', 'String', 'ExpandString', 'MultiString', 'Binary')][string]$Type = 'DWord'
     )
-    if ($script:PB.CheckOnly) { $c = Get-PbRegValue $Path $Name; Add-PbCheck ($c.Exists -and (Test-PbSameValue $c.Value $Value)); return }
+    $c = Get-PbRegValue $Path $Name
+    $same = $c.Exists -and (Test-PbSameValue $c.Value $Value)
+    if ($script:PB.CheckOnly) { Add-PbCheck $same; return }
+    # то же значение, но другого типа (строка «1» вместо DWord 1) — переписывается
+    if ($same -and (-not $c.Kind -or $c.Kind -eq $Type)) { Add-PbAction 'Reg' "$Path\$Name" $c.Value $Value $false; return }
     $keyCreated = $false
     if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null; $keyCreated = $true }
-    $oldExists = $false; $oldValue = $null; $oldKind = $null
-    try {
-        $key = Get-Item -Path $Path
-        if ($key.GetValueNames() -contains $Name) {
-            $oldExists = $true
-            $oldValue = $key.GetValue($Name, $null, 'DoNotExpandEnvironmentNames')
-            $oldKind = $key.GetValueKind($Name).ToString()
-        }
-    } catch { }
     New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force -ErrorAction Stop | Out-Null
     Add-PbChange ([ordered]@{
         Kind = 'Reg'; Path = $Path; Name = $Name; New = $Value; Type = $Type
-        OldExists = $oldExists; Old = $oldValue; OldKind = $oldKind; KeyCreated = $keyCreated
+        OldExists = [bool]$c.Exists; Old = $c.Value; OldKind = $c.Kind; KeyCreated = $keyCreated
     })
+    Add-PbAction 'Reg' "$Path\$Name" $(if ($c.Exists) { $c.Value }) $Value $true
 }
 
 # Значение по умолчанию у ключа, например для классического контекстного меню.
 function Set-RegDefault ([string]$Path, [string]$Value) {
-    if ($script:PB.CheckOnly) { $c = Get-PbRegDefault $Path; Add-PbCheck ($c.Exists -and [string]$c.Value -ceq $Value); return }
-    $existed = Test-Path $Path
+    $c = Get-PbRegDefault $Path
+    $same = $c.Exists -and [string]$c.Value -ceq $Value
+    if ($script:PB.CheckOnly) { Add-PbCheck $same; return }
+    if ($same) { Add-PbAction 'Reg' "$Path\(по умолчанию)" $c.Value $Value $false; return }
+    $existed = [bool]$c.Exists
     if (-not $existed) { New-Item -Path $Path -Force | Out-Null }
     Set-Item -Path $Path -Value $Value -Force
     Add-PbChange ([ordered]@{ Kind = 'RegKey'; Path = $Path; KeyCreated = (-not $existed) })
+    Add-PbAction 'Reg' "$Path\(по умолчанию)" $(if ($existed) { $c.Value }) $Value $true
 }
 
+$script:PbSvcModeText = @{ Auto = 'автоматически'; Manual = 'вручную'; Disabled = 'отключена' }
+
 function Set-SvcStart ([string]$Name, [ValidateSet('Disabled', 'Manual', 'Automatic')][string]$Start) {
-    if ($script:PB.CheckOnly) {
-        $m = Get-PbSvcMode $Name
-        if ($m) { Add-PbCheck ($m -eq ($Start -replace '^Automatic$', 'Auto')) }   # службы нет — нечего проверять
-        return
-    }
+    $old = Get-PbSvcMode $Name
+    if (-not $old) { return }   # службы нет — нечего проверять и менять
+    $want = $Start -replace '^Automatic$', 'Auto'
+    if ($script:PB.CheckOnly) { Add-PbCheck ($old -eq $want); return }
+    if ($old -eq $want) { Add-PbAction 'Service' "служба $Name" $script:PbSvcModeText[$old] $script:PbSvcModeText[$want] $false; return }
     $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
-    if (-not $svc) { return }
-    $old = (Get-CimInstance Win32_Service -Filter "Name='$Name'").StartMode
-    if ($Start -eq 'Disabled' -and $svc.Status -eq 'Running') { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
+    if ($Start -eq 'Disabled' -and $svc -and $svc.Status -eq 'Running') { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
     Set-Service -Name $Name -StartupType $Start -ErrorAction Stop
     Add-PbChange ([ordered]@{ Kind = 'Service'; Name = $Name; Old = $old; New = $Start })
+    $oldText = if ($script:PbSvcModeText[$old]) { $script:PbSvcModeText[$old] } else { $old }
+    Add-PbAction 'Service' "служба $Name" $oldText $script:PbSvcModeText[$want] $true
 }
 
 function Disable-Task ([string]$TaskPath, [string]$TaskName) {
-    if ($script:PB.CheckOnly) { $st = Get-PbTaskState $TaskPath $TaskName; if ($st) { Add-PbCheck ($st -eq 'Disabled') }; return }
-    $t = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
-    if (-not $t) { return }
-    $wasEnabled = $t.State -ne 'Disabled'
-    if ($wasEnabled) { Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null }
-    Add-PbChange ([ordered]@{ Kind = 'Task'; TaskPath = $TaskPath; TaskName = $TaskName; WasEnabled = $wasEnabled })
+    $st = Get-PbTaskState $TaskPath $TaskName
+    if (-not $st) { return }   # задачи нет
+    if ($script:PB.CheckOnly) { Add-PbCheck ($st -eq 'Disabled'); return }
+    if ($st -eq 'Disabled') { Add-PbAction 'Task' "задача $TaskPath$TaskName" 'отключена' 'отключена' $false; return }
+    Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+    Add-PbChange ([ordered]@{ Kind = 'Task'; TaskPath = $TaskPath; TaskName = $TaskName; WasEnabled = $true })
+    Add-PbAction 'Task' "задача $TaskPath$TaskName" 'включена' 'отключена' $true
 }
 
 # Удаление UWP у всех пользователей и из образа (чтобы не вернулись у новых профилей). Не откатывается.
@@ -224,6 +244,7 @@ function Remove-Appx ([string[]]$Names) {
     $prov = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
     foreach ($n in $Names) {
         $pk = Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue
+        Add-PbAction 'Appx' "приложение $n" $(if ($pk) { 'установлено' } else { 'нет' }) 'нет' ([bool]$pk)
         foreach ($p in $pk) {
             try { Remove-AppxPackage -Package $p.PackageFullName -AllUsers -ErrorAction Stop }
             catch { try { Remove-AppxPackage -Package $p.PackageFullName -ErrorAction Stop } catch { Write-Warn2 "$n : $($_.Exception.Message)" } }
@@ -312,10 +333,18 @@ function Invoke-PbWingetTimed ([string[]]$WingetArgs, [double]$TimeoutMin = 15, 
     return @{ Code = $code; TimedOut = $timedOut; Skipped = $skipped; Log = $log; Seconds = [int]$sw.Elapsed.TotalSeconds; Out = @($text -split "`r?`n" | Select-Object -Skip 1) }
 }
 
-function Test-WingetInstalled ([string]$Id) {
+# установленный пакет winget: @{ Version; Available } или $null. Версия — из таблицы winget list (lib\status.ps1)
+function Get-PbWingetEntry ([string]$Id) {
     $r = Invoke-PbWingetTimed @('list', '--id', $Id, '-e', '--accept-source-agreements', '--disable-interactivity') 2 "list_$Id"
-    return ($r.Code -eq 0)
+    if ($r.Code -ne 0) { return $null }
+    $e = $null
+    if (Get-Command ConvertFrom-PbWingetList -ErrorAction SilentlyContinue) { try { $e = (ConvertFrom-PbWingetList $r.Out)[$Id.ToLower()] } catch { } }
+    if (-not $e) { $e = @{ Version = ''; Available = '' } }
+    if ($e.Version -eq 'Unknown') { $e.Version = '' }
+    return $e
 }
+
+function Format-PbVersion ([string]$V) { if ($V) { "версия $V" } else { '' } }
 
 # коды winget при установке: @{ Ok; Reboot; Text }
 function Get-PbWingetCodeInfo ($Code) {
@@ -334,11 +363,18 @@ function Get-PbWingetCodeInfo ($Code) {
 }
 
 # TimeoutMin в каталоге — для тяжёлых пакетов; по умолчанию 15 мин, с мастером установки — 60
+# Итог: «уже установлено (версия)», «установлено (версия)», «обновлено (было → стало)», «ОШИБКА» — по winget list
+# до и после и по кодам выхода («уже установлено», «новее нет» — это не установка)
 function Install-WingetApp ($App) {
     $verb = 'install'
-    if (Test-WingetInstalled $App.WingetId) {
+    $pre = Get-PbWingetEntry $App.WingetId
+    if ($pre) {
         # обновление — только если в окне выбрано «есть обновление»; иначе установленное не трогаем
-        if ($script:PB.Upgrades -notcontains $App.Id) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
+        if ($script:PB.Upgrades -notcontains $App.Id) {
+            Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' (Format-PbVersion $pre.Version)
+            Add-PbAction 'App' $App.Name $pre.Version $pre.Version $false
+            return
+        }
         $verb = 'upgrade'
     }
     $a = @($verb, '--id', $App.WingetId, '-e', '--source', 'winget',
@@ -357,8 +393,24 @@ function Install-WingetApp ($App) {
     }
     $i = Get-PbWingetCodeInfo $r.Code
     if ($i.Reboot) { $script:PB.NeedReboot = $true }
-    if ($i.Ok -or (Test-WingetInstalled $App.WingetId)) {
-        Write-Ok "$($App.Name)$(if ($i.Text) { ": $($i.Text)" })"; Add-Result $App.Name $(if ($verb -eq 'upgrade') { 'обновлено' } else { 'установлено' }) ([string]$i.Text)
+    $post = $null
+    if ($i.Ok -or ($post = Get-PbWingetEntry $App.WingetId)) {
+        if (-not $post) { $post = Get-PbWingetEntry $App.WingetId }
+        $ver = if ($post) { $post.Version } else { '' }
+        $noop = ($r.Code -eq -1978335135) -or ($r.Code -eq -1978335189)   # 0x8A150061 уже установлено, 0x8A15002B новее нет
+        if ($noop -or ($verb -eq 'upgrade' -and $pre.Version -and $ver -eq $pre.Version)) {
+            $t = @((Format-PbVersion $ver), $(if ($verb -eq 'upgrade') { 'новее нет' })) | Where-Object { $_ }
+            Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' ($t -join ', ')
+            Add-PbAction 'App' $App.Name $ver $ver $false
+        } elseif ($verb -eq 'upgrade') {
+            $t = @("$(if ($pre.Version) { $pre.Version } else { '?' }) → $(if ($ver) { $ver } else { '?' })", $i.Text) | Where-Object { $_ }
+            Write-Ok "$($App.Name): обновлено, $($t -join ', ')"; Add-Result $App.Name 'обновлено' ($t -join ', ')
+            Add-PbAction 'App' $App.Name $pre.Version $ver $true
+        } else {
+            $t = @((Format-PbVersion $ver), $i.Text) | Where-Object { $_ }
+            Write-Ok "$($App.Name)$(if ($t) { ": $($t -join ', ')" })"; Add-Result $App.Name 'установлено' ($t -join ', ')
+            Add-PbAction 'App' $App.Name $null $(if ($ver) { $ver } else { 'установлено' }) $true
+        }
     } else {
         Write-Fail "$($App.Name): $($i.Text)"; Add-Result $App.Name 'ОШИБКА' "$($i.Text); журнал winget: $($r.Log)"
     }
@@ -367,16 +419,20 @@ function Install-WingetApp ($App) {
 # ---------- установка с официального сайта (Source = 'web') ----------
 # Страница загрузки → самая свежая версия по FileRegex → скачать → проверить цифровую подпись → запустить.
 
-function Test-UninstallEntry ([string]$Like) {
-    if (-not $Like) { return $false }
+# запись Uninstall по шаблону названия: @{ Version } или $null
+function Get-PbUninstallVersion ([string]$Like) {
+    if (-not $Like) { return $null }
     $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-    return [bool](Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like $Like } | Select-Object -First 1)
+    $e = Get-ItemProperty $keys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like $Like } | Select-Object -First 1
+    if ($e) { return @{ Version = [string]$e.DisplayVersion } }
+    return $null
 }
 
 function Install-WebApp ($App) {
-    if (Test-UninstallEntry $App.Detect) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено'; return }
+    $pre = Get-PbUninstallVersion $App.Detect
+    if ($pre) { Write-Skip "$($App.Name): уже установлено"; Add-Result $App.Name 'уже установлено' (Format-PbVersion $pre.Version); Add-PbAction 'App' $App.Name $pre.Version $pre.Version $false; return }
     foreach ($u in $App.PageUrl, $App.BaseUrl) { if ($u -notmatch '^https://') { throw "адрес $u не HTTPS: загрузка без шифрования не выполняется" } }
     if (-not $App.Signer) { throw 'в каталоге не указан издатель (Signer): без проверки издателя файл с сайта не запускается' }
     Write-Host "    поиск актуальной версии на $($App.PageUrl)..." -ForegroundColor Gray
@@ -399,7 +455,8 @@ function Install-WebApp ($App) {
     if ($App.Interactive) { Write-Host "    откроется мастер установки $($App.Name), пройдите его вручную" -ForegroundColor Yellow }
     $p = Start-Process -FilePath $dst -Wait -PassThru
     if ($p.ExitCode -in 3010, 1641) { $script:PB.NeedReboot = $true }
-    if (Test-UninstallEntry $App.Detect) { Write-Ok $App.Name; Add-Result $App.Name 'установлено' $file }
+    $post = Get-PbUninstallVersion $App.Detect
+    if ($post) { Write-Ok $App.Name; Add-Result $App.Name 'установлено' $(if ($post.Version) { "версия $($post.Version)" } else { $file }); Add-PbAction 'App' $App.Name $null $(if ($post.Version) { $post.Version } else { 'установлено' }) $true }
     else { Write-Fail "$($App.Name): установщик завершился, но программа не найдена"; Add-Result $App.Name 'ОШИБКА' "код $($p.ExitCode)" }
 }
 
@@ -444,11 +501,26 @@ function Get-PbTweakStatus ($Tweak) {
     return 'partial'
 }
 
+# Итог твика по-честному: «уже было» — ничего не менялось, «применено» — изменено всё (или Apply с другими командами,
+# про которые судить нельзя), «применено» с подробностью «изменено N из M» — часть уже стояла.
+# Твик со своим Check, который уже выполняется, не запускается вовсе
 function Invoke-Tweak ($Tweak) {
     Write-Host "  - $($Tweak.Name)" -ForegroundColor White
     try {
+        if ($Tweak.Check) {
+            $pre = $false
+            try { $pre = [bool](& $Tweak.Check) } catch { }
+            if ($pre) { Write-Skip 'уже настроено'; Add-Result $Tweak.Name 'уже было'; return }
+        }
+        $mark = $script:PB.Actions.Count
         & $Tweak.Apply
-        Add-Result $Tweak.Name 'применено'
+        $acts = @($script:PB.Actions | Select-Object -Skip $mark)
+        $changed = @($acts | Where-Object { $_.Changed }).Count
+        if ($acts.Count -and -not $changed -and (Test-PbTweakCheckable $Tweak)) {
+            Write-Skip 'уже настроено'; Add-Result $Tweak.Name 'уже было'; return
+        }
+        $detail = if ($acts.Count -and $changed -lt $acts.Count) { "изменено $changed из $($acts.Count), остальное уже было" } else { '' }
+        Add-Result $Tweak.Name 'применено' $detail
         if ($Tweak.Manual) { Add-Manual "$($Tweak.Name): $($Tweak.Manual)" }
     } catch {
         Write-Fail $_.Exception.Message; Add-Result $Tweak.Name 'ОШИБКА' $_.Exception.Message

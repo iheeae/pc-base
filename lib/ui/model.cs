@@ -142,7 +142,7 @@ namespace PcBase
         public string Detail { get { return _detail; } set { if (_detail == value) return; _detail = value ?? ""; Raise("Detail"); Raise("HasDetail"); } }
         public bool HasDetail { get { return !string.IsNullOrEmpty(_detail); } }
 
-        // значки Segoe Fluent Icons / MDL2: ожидание, идёт, готово, пропущено, ошибка
+        // значки Segoe Fluent Icons / MDL2: ожидание, идёт, готово, уже было, пропущено, ошибка
         public string Glyph
         {
             get
@@ -151,6 +151,7 @@ namespace PcBase
                 {
                     case "run": return "\uE895";
                     case "done": return "\uE73E";
+                    case "same": return "\uE930";
                     case "skip": return "\uE738";
                     case "error": return "\uE783";
                     default: return "\uE91F";
@@ -165,6 +166,7 @@ namespace PcBase
                 {
                     case "run": return "выполняется";
                     case "done": return "готово";
+                    case "same": return "уже было";
                     case "skip": return "пропущено";
                     case "error": return "ошибка";
                     default: return "ожидает";
