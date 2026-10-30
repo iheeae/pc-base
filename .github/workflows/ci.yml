@@ -1,0 +1,56 @@
+# Проверки на настоящей Windows: Windows PowerShell 5.1 (как на чистом компьютере) и PowerShell 7.
+# Те же скрипты запускаются локально: tests\ci.ps1 (проверки из CLAUDE.md, WPF) и tests\run.ps1 (логика без окна и сети).
+# Раз в неделю — есть ли все WingetId каталога в источнике winget (tools\check-winget-ids.ps1).
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1'   # понедельник, 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверки из CLAUDE.md (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/ci.ps1
+      - name: Проверки без окна и сети (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/run.ps1
+      - name: Проверки без окна и сети (PowerShell 7)
+        shell: pwsh
+        run: ./tests/run.ps1
+      - name: PSScriptAnalyzer (ошибки)
+        shell: powershell
+        run: |
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -SkipPublisherCheck
+          $r = @(Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error)
+          $r | Format-Table RuleName, ScriptName, Line, Message -AutoSize -Wrap | Out-String -Width 220 | Write-Host
+          $w = @(Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning)
+          Write-Host "Предупреждений: $($w.Count) (не блокируют)"
+          $w | Group-Object RuleName | Sort-Object Count -Descending | Format-Table Count, Name -AutoSize | Out-String | Write-Host
+          if ($r.Count) { exit 1 }
+
+  winget-ids:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: WingetId каталога есть в источнике winget
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/check-winget-ids.ps1
