@@ -22,11 +22,14 @@ $fail = @()
 $sw = [Diagnostics.Stopwatch]::StartNew()
 # сторож: раз в 5 с — что на экране; через 300 с закрыть все окна (модальные тоже), чтобы проверка не висела
 Add-Type -AssemblyName PresentationFramework, WindowsBase
+$script:WatchLog = New-Object System.Collections.ArrayList
 $watch = New-Object Windows.Threading.DispatcherTimer
 $watch.Interval = [TimeSpan]::FromSeconds(5)
 $watch.add_Tick({
     $wins = @(); try { $wins = @([Windows.Application]::Current.Windows | ForEach-Object { "$($_.GetType().Name) «$($_.Title)» visible=$($_.IsVisible)" }) } catch { }
-    Write-Host ("  [{0,3} с] окон: {1}: {2}" -f [int]$sw.Elapsed.TotalSeconds, $wins.Count, ($wins -join '; '))
+    $line = ("[{0,3} с] окон: {1}: {2}; статусы: {3}; smoke: {4}" -f [int]$sw.Elapsed.TotalSeconds, $wins.Count, ($wins -join '; '), $script:SmokeState, $env:TR_SMOKE_STEP)
+    Write-Host "  $line"
+    [void]$script:WatchLog.Add($line)
     if ($sw.Elapsed.TotalSeconds -gt 300) {
         $script:SmokeTimeout = $true
         $watch.Stop()
@@ -41,7 +44,7 @@ try {
     $fail += "окно упало: $($_.Exception.Message) $($_.ScriptStackTrace)"
 }
 $watch.Stop()
-if ($script:SmokeTimeout) { $fail += 'окно не закрылось само за 300 с (см. строки сторожа выше: какие окна были открыты)' }
+if ($script:SmokeTimeout) { $fail += "окно не закрылось само за 300 с. Сторож:`n" + (($script:WatchLog | Select-Object -Last 25) -join "`n") }
 foreach ($f in @(Get-ChildItem $script:PB.LogDir -Filter 'ui-error_*.txt' -ErrorAction SilentlyContinue)) {
     $fail += "ошибка в окне: " + (Get-Content $f.FullName -Raw -Encoding UTF8)
 }
@@ -52,8 +55,8 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($fail.Count) {
     $fail | ForEach-Object { Write-Host "FAIL $_" -ForegroundColor Red; if ($env:GITHUB_ACTIONS) { Write-Host ("::error title=tests/smoke.ps1::" + ($_ -replace '%', '%25' -replace '\r?\n', '%0A')) } }
-    exit 1
+    [Environment]::Exit(1)   # фоновые задачи окна (runspace) не должны держать процесс
 }
 if ($own.Count -and $env:GITHUB_ACTIONS) { Write-Host ("::warning title=tests/smoke.ps1::" + (($own | Select-Object -First 10) -join '%0A')) }
 Write-Host 'Окно открылось, отработало и закрылось без ошибок' -ForegroundColor Green
-exit 0
+[Environment]::Exit(0)

@@ -2285,6 +2285,7 @@ function Show-SelectionDialog {
             $smoke.add_Tick({
                 $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
                 $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
+                $env:TR_SMOKE_STEP = "tick $([int]$sec) с, статусы $(if ($busy) { 'идут' } else { 'готовы' }), done=$([bool]$ui.SmokeDone)"
                 if ($busy -and $sec -lt 120) { return }
                 if (-not $ui.SmokeDone) {
                     $ui.SmokeDone = $true
@@ -2294,11 +2295,14 @@ function Show-SelectionDialog {
                     if ($first) { $ctl.List.SelectedItem = $first[0] }
                     foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
                     foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
+                    $env:TR_SMOKE_STEP = 'план'
                     $c = Get-RunChoice
                     if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                    $env:TR_SMOKE_STEP = 'план показан'
                     return
                 }
                 $smoke.Stop()
+                $env:TR_SMOKE_STEP = 'закрытие'
                 $win.Close()
             })
             $smoke.Start()
