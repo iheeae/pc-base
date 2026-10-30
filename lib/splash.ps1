@@ -136,7 +136,7 @@ function Close-PbSplash {
 }
 
 # падение программы целиком: окно с причиной и путём к журналу вместо красного текста в скрытой консоли.
-# В стиле программы, если окно уже загружено (Show-UiMessage из lib\gui.ps1), иначе — системное сообщение
+# Системное сообщение: оно не зависит от состояния WPF и ждёт нажатия
 function Show-PbFatal ($ErrorRecord, [string]$LogPath) {
     Close-PbSplash
     $msg = if ($ErrorRecord.Exception) { $ErrorRecord.Exception.Message } else { [string]$ErrorRecord }
@@ -145,24 +145,15 @@ function Show-PbFatal ($ErrorRecord, [string]$LogPath) {
     if ($ErrorRecord.InvocationInfo) { Write-Host $ErrorRecord.InvocationInfo.PositionMessage }
     if (-not $script:PbSpawned) { return }   # консоль (-Console): текста выше достаточно
     $where = if ($LogPath) { "Подробности записаны в журнал выполнения: $LogPath" } else { 'Журнал выполнения не создан.' }
+    # системное сообщение, а не окно в стиле программы: после сбоя WPF его окна могут закрываться сразу же
     $open = $false
-    $shown = $false
-    if (Get-Command Show-UiMessage -ErrorAction SilentlyContinue) {
-        try {
-            $open = Show-UiMessage -Title 'Что-то пошло не так' -Primary $(if ($LogPath) { 'Открыть журнал' } else { 'Закрыть' }) -Secondary $(if ($LogPath) { 'Закрыть' }) -Lines @(
-                'Работа Tabula Rasa прервана из-за ошибки.', @{ Text = $msg; Tone = 'danger' }, @{ Text = $where; Tone = 'muted'; Gap = $true },
-                @{ Text = 'Изменения, внесённые до ошибки, записаны в журнал изменений и отменяются через «⋯ → Откат изменений» или undo.ps1.'; Tone = 'muted' })
-            $shown = $true
-        } catch { }
-    }
-    if (-not $shown) {
-        try {
+    if ($env:TR_SMOKE) { return }
+    try {
             Add-Type -AssemblyName PresentationFramework
-            $text = "Работа Tabula Rasa прервана из-за ошибки.`n`n$msg`n`n$where"
+            $text = "Работа Tabula Rasa прервана из-за ошибки.`n`n$msg`n`n$where`n`nИзменения, внесённые до ошибки, записаны в журнал изменений и отменяются через «⋯ → Откат изменений» или undo.ps1."
             $btn = if ($LogPath) { 'YesNo' } else { 'OK' }
             if ($LogPath) { $text += "`n`nОткрыть журнал?" }
             $open = ([Windows.MessageBox]::Show($text, 'Tabula Rasa: что-то пошло не так', $btn, 'Error')) -eq 'Yes'
-        } catch { }
-    }
+    } catch { }
     if ($open -and $LogPath -and (Test-Path -LiteralPath $LogPath)) { Start-Process notepad.exe -ArgumentList "`"$LogPath`"" }
 }

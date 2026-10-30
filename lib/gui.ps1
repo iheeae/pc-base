@@ -151,7 +151,16 @@ function Initialize-Ui {
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
     # Application нужен, чтобы стили видели и всплывающие меню/подсказки; Run() не зовём, окна — через ShowDialog
     $app = [Windows.Application]::Current
-    if (-not $app) { $app = New-Object Windows.Application; $app.ShutdownMode = 'OnExplicitShutdown' }
+    if (-not $app) {
+        $app = New-Object Windows.Application; $app.ShutdownMode = 'OnExplicitShutdown'
+        # ошибка в обработчике окна (кнопка, таймер фоновой задачи) не роняет программу: запись в журнал, сообщение,
+        # окно остаётся открытым. Без этого исключение закрывало окно раньше, чем его можно было прочитать
+        $app.add_DispatcherUnhandledException({
+            param($sender, $e)
+            $e.Handled = $true
+            Write-PbUiError $e.Exception
+        })
+    }
     $theme = Get-UiTheme
     $res = New-Object Windows.ResourceDictionary
     $res.MergedDictionaries.Add((Read-Xaml 'theme.xaml'))
@@ -160,6 +169,36 @@ function Initialize-Ui {
     $theme.Icon = New-UiIcon $res
     $script:PbUiTheme = $theme
     return $theme
+}
+
+# ошибка окна: полный текст — в журнал выполнения и в logs\ui-error_<дата>.txt, коротко — системным сообщением
+# (оно не зависит от состояния WPF и ждёт нажатия). Повтор одной и той же ошибки не показывается
+function Write-PbUiError ($Exception) {
+    $ex = $Exception
+    while ($ex.InnerException -and ($ex -is [Management.Automation.MethodInvocationException] -or $ex -is [Reflection.TargetInvocationException])) { $ex = $ex.InnerException }
+    $where = ''
+    if ($ex -is [Management.Automation.RuntimeException] -and $ex.ErrorRecord) {
+        $r = $ex.ErrorRecord
+        $where = "$($r.InvocationInfo.PositionMessage)`r`n$($r.ScriptStackTrace)"
+    }
+    $text = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $($ex.GetType().FullName): $($ex.Message)`r`n$where`r`n$($Exception.ToString())`r`n"
+    Write-Host "  ОШИБКА ОКНА: $($ex.Message)" -ForegroundColor Red
+    Write-Host $where
+    $file = $null
+    try {
+        New-Item -ItemType Directory -Path $script:PB.LogDir -Force | Out-Null
+        $file = Join-Path $script:PB.LogDir "ui-error_$($script:PB.Stamp).txt"
+        [IO.File]::AppendAllText($file, $text + "`r`n", (New-Object Text.UTF8Encoding $false))
+    } catch { }
+    if (-not $script:PbUiErrors) { $script:PbUiErrors = @{} }
+    $key = $ex.Message
+    if ($script:PbUiErrors.ContainsKey($key)) { return }
+    $script:PbUiErrors[$key] = $true
+    if ($env:TR_SMOKE) { return }   # проверка окна в CI: без сообщений, ошибки читаются из файла
+    try {
+        [void][Windows.MessageBox]::Show("В окне Tabula Rasa произошла ошибка. Работа продолжается, но результат последнего действия может быть неполным.`n`n$($ex.Message)`n`nПодробности: $file",
+            'Tabula Rasa: ошибка', 'OK', 'Warning')
+    } catch { }
 }
 
 function New-UiWindow ([string]$Xaml, $Theme) {
@@ -2209,6 +2248,32 @@ function Show-SelectionDialog {
         Start-EngineCheck
         $themeTimer.Start()
         if (Initialize-DataLayout) { Start-DataJob 'push' }
+        # проверка окна в CI (tests\smoke.ps1): дождаться статусов, пройти по разделам, показать план, закрыть
+        if ($env:TR_SMOKE) {
+            $ui.SmokeStart = Get-Date
+            $smoke = New-Object Windows.Threading.DispatcherTimer
+            $smoke.Interval = [TimeSpan]::FromSeconds(1)
+            $smoke.add_Tick({
+                $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
+                $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
+                if ($busy -and $sec -lt 240) { return }
+                if (-not $ui.SmokeDone) {
+                    $ui.SmokeDone = $true
+                    Write-Host "  smoke: статусы готовы через $([int]$sec) с"
+                    foreach ($n in @($nav | Where-Object { $_.Kind -eq 'cat' })) { Select-Nav $n }
+                    $first = @($items | Where-Object { $_.Kind -eq 'app' } | Select-Object -First 1)
+                    if ($first) { $ctl.List.SelectedItem = $first[0] }
+                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'tweak' } | Select-Object -First 3)) { $it.IsChecked = $true }
+                    foreach ($it in @($items | Where-Object { $_.Kind -eq 'app' -and -not $_.IsLocked } | Select-Object -First 2)) { $it.IsChecked = $true }
+                    $c = Get-RunChoice
+                    if ($c) { Show-Plan $c; Write-Host "  smoke: план из $($runSteps.Count) шагов" }
+                    return
+                }
+                $smoke.Stop()
+                $win.Close()
+            })
+            $smoke.Start()
+        }
     })
 
     $closedOk = $win.ShowDialog()

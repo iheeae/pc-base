@@ -50,6 +50,10 @@ jobs:
             Write-Host "::error title=tests/run.ps1 (pwsh), последние строки::$t"
             exit 1
           }
+      - name: Окно открывается и работает (Windows PowerShell 5.1)
+        shell: powershell
+        timeout-minutes: 8
+        run: powershell -NoProfile -STA -ExecutionPolicy Bypass -File ./tests/smoke.ps1
       - name: PSScriptAnalyzer (ошибки)
         shell: powershell
         run: |
