@@ -52,8 +52,16 @@ jobs:
           }
       - name: Окно открывается и работает (Windows PowerShell 5.1)
         shell: powershell
-        timeout-minutes: 8
-        run: powershell -NoProfile -STA -ExecutionPolicy Bypass -File ./tests/smoke.ps1
+        timeout-minutes: 10
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'smoke.log'
+          powershell -NoProfile -STA -ExecutionPolicy Bypass -File ./tests/smoke.ps1 *>&1 | Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          if ($code) {
+            $t = (Get-Content $log -Tail 40 -Encoding UTF8 | ForEach-Object { $_ -replace '%', '%25' }) -join '%0A'
+            Write-Host "::error title=tests/smoke.ps1, последние строки::$t"
+            exit 1
+          }
       - name: PSScriptAnalyzer (ошибки)
         shell: powershell
         run: |

@@ -2256,7 +2256,7 @@ function Show-SelectionDialog {
             $smoke.add_Tick({
                 $sec = ((Get-Date) - $ui.SmokeStart).TotalSeconds
                 $busy = $ui.StatusJob -and -not $ui.StatusJob.Handle.IsCompleted
-                if ($busy -and $sec -lt 240) { return }
+                if ($busy -and $sec -lt 120) { return }
                 if (-not $ui.SmokeDone) {
                     $ui.SmokeDone = $true
                     Write-Host "  smoke: статусы готовы через $([int]$sec) с"
