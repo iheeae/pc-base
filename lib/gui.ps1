@@ -542,8 +542,8 @@ function Show-SelectionDialog {
         'CaptureCardTitle', 'CaptureCardText', 'CaptureCardBtn', 'CaptureDetail', 'CaptureDetailHint', 'CaptureSummary', 'CaptureBtn',
         'SearchBox', 'AddAppBtn', 'RemoveMine', 'Logo', 'HostChips', 'Search', 'SearchKey', 'SearchClear', 'SetBtn', 'SetBtnText', 'Nav', 'NavBottom', 'ListTitle', 'ListHint', 'CatButtons', 'CatCheck',
         'HeadLeft', 'MoreBtn', 'AddAppText', 'FilterBar', 'FilterMissing', 'FilterUpdates', 'MarkUpdates', 'StatusScan', 'InstallPane',
-        'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RebootBtn', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
-        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunApply', 'RunClose', 'RunStatus',
+        'RunPane', 'RunTitle', 'RunHint', 'RunProgress', 'RunBanner', 'RunList', 'ManualBox', 'ManualList', 'LogToggle', 'RunLog',
+        'RunBack', 'RunSkip', 'RunStop', 'RunRetry', 'RunOpenLog', 'RunOpenReport', 'RunOpenFolder', 'RunReboot', 'RunApply', 'RunClose', 'RunStatus',
         'List', 'ListEmpty', 'DetailHint', 'Detail', 'PcNameLabel', 'PcName', 'PcNameFixed', 'PcNameCur', 'ModePlan', 'ModeApply', 'Summary', 'SaveBtn', 'OkBtn',
         'Notice', 'NoticeIcon', 'NoticeText', 'NoticeClose', 'DataIcon', 'DataStatus', 'DataBtn', 'DataLogin', 'DataCode', 'DataOpen',
         'FilesCard', 'FilesCardIcon', 'FilesCardTitle', 'FilesCardText', 'FilesCardBtn') {
@@ -1729,7 +1729,8 @@ function Show-SelectionDialog {
     $runTimer.Interval = [TimeSpan]::FromMilliseconds(300)
 
     function Set-RunButtons ([string]$State) {
-        $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run', 'done'); RunClose = @('done') }
+        $vis = @{ RunBack = @('plan', 'done'); RunApply = @('plan'); RunSkip = @('run'); RunStop = @('run'); RunRetry = @(); RunOpenLog = @('run')
+                  RunOpenReport = @('done'); RunOpenFolder = @('done'); RunReboot = @('done'); RunClose = @('done') }
         foreach ($k in $vis.Keys) { $ctl[$k].Visibility = if ($vis[$k] -contains $State) { 'Visible' } else { 'Collapsed' } }
         # во время прогона выбор и режимы не трогаются
         foreach ($c in $ctl.TabInstall, $ctl.TabCapture, $ctl.SearchBox, $ctl.AddAppBtn, $ctl.SetBtn, $ctl.MoreBtn) { $c.IsEnabled = $State -ne 'run' }
@@ -1907,9 +1908,16 @@ function Show-SelectionDialog {
             $manualItems.Add($it)
         }
         $ctl.ManualBox.Visibility = if ($manualItems.Count) { 'Visible' } else { 'Collapsed' }
-        $ctl.RunStatus.Text = "Журнал выполнения: $($ui.RunLogFile)"
+        # отчёт (lib\report.ps1): «Документы\Tabula Rasa\Отчёты» и копия в журналах
+        $ui.Report = $s.Report
+        $ctl.RunStatus.Text = if ($s.Report) { "Отчёт: $($s.Report)" } else { "Отчёт не создан. Журнал выполнения: $($ui.RunLogFile)" }
         Set-RunButtons 'done'
         $ctl.RunRetry.Visibility = if ($bad) { 'Visible' } else { 'Collapsed' }
+        $ctl.RunOpenReport.IsEnabled = [bool]$s.Report
+        # нужна перезагрузка — главная кнопка «Перезагрузить», иначе «Закрыть»
+        $accent = $win.FindResource('AccentButton')
+        if ($s.NeedReboot) { $ctl.RunReboot.Style = $accent; $ctl.RunClose.ClearValue([Windows.FrameworkElement]::StyleProperty) }
+        else { $ctl.RunClose.Style = $accent; $ctl.RunReboot.ClearValue([Windows.FrameworkElement]::StyleProperty) }
         if (-not $win.IsActive) { [PcBase.Native]::Flash((New-Object Windows.Interop.WindowInteropHelper $win).Handle) }
         $ui.Ran = $true
         $ui.Run = $null
@@ -1951,8 +1959,14 @@ function Show-SelectionDialog {
         Start-Run $sel
     })
     $ctl.RunOpenLog.add_Click({ Start-Process explorer.exe $script:PB.LogDir })
+    # через explorer.exe: браузер открывается от имени пользователя, а не с правами администратора, как у этого процесса
+    $ctl.RunOpenReport.add_Click({ if ($ui.Report -and (Test-Path -LiteralPath $ui.Report)) { Start-Process explorer.exe "`"$($ui.Report)`"" } })
+    $ctl.RunOpenFolder.add_Click({
+        if ($ui.Report -and (Test-Path -LiteralPath $ui.Report)) { Start-Process explorer.exe "/select,`"$($ui.Report)`"" }
+        else { $d = Get-PbReportDir; if (-not (Test-Path $d)) { $d = $script:PB.LogDir }; Start-Process explorer.exe "`"$d`"" }
+    })
     $ctl.RunClose.add_Click({ $win.DialogResult = $true })
-    $ctl.RebootBtn.add_Click({
+    $ctl.RunReboot.add_Click({
         if (Show-UiMessage -Owner $win -Title 'Перезагрузить компьютер?' -Primary 'Перезагрузить' -Secondary 'Позже' -SafeDefault -Lines @('Несохранённые данные в других программах будут потеряны.')) { Restart-Computer -Force }
     })
     $ctl.LogToggle.add_Click({
@@ -2094,12 +2108,15 @@ function Show-SelectionDialog {
     $win.add_ContentRendered({
         # время от старта процесса до окна — в журнал выполнения (setup.ps1); цель — меньше 2 с
         try { $script:PB.WindowShownSec = [Math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 1) } catch { }
-        # Topmost нужен, только чтобы окно появилось поверх консоли; дальше он закрывал бы браузер со страницей входа в GitHub
+        # Topmost нужен, только чтобы окно появилось поверх заставки и окна, из которого запустили; дальше он закрывал бы браузер со страницей входа в GitHub
         $win.Topmost = $false; [void]$win.Activate()
         Select-Nav $ctl.Nav.SelectedItem
         Update-HostChips
-        # консоль setup.ps1 не нужна: окно — единственный интерфейс (setup.ps1 -Console её оставляет)
+        # консоль setup.ps1 не нужна: окно — единственный интерфейс (setup.ps1 -Console её оставляет). Обычно она
+        # и так скрыта (setup.ps1 запускает себя скрытым процессом) — это на случай, если Windows всё же её показала
         if ($RunInWindow) { [PcBase.Native]::ShowConsole($false) }
+        # заставка (lib\splash.ps1) уступает место окну
+        if (Get-Command Close-PbSplash -ErrorAction SilentlyContinue) { Set-PbSplash '' 1; Close-PbSplash }
         Start-FilesJob
         Start-StatusJob
         Start-EngineCheck
@@ -2108,7 +2125,7 @@ function Show-SelectionDialog {
     })
 
     $closedOk = $win.ShowDialog()
-    if ($RunInWindow) { [PcBase.Native]::ShowConsole($true); return @{ RanInWindow = $true; Ran = [bool]$ui.Ran } }
+    if ($RunInWindow) { return @{ RanInWindow = $true; Ran = [bool]$ui.Ran } }
     if (-not $closedOk) { return $null }
     $out = $ui.Result
     $out.DryRun = [bool]$ctl.ModePlan.IsChecked

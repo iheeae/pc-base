@@ -14,7 +14,8 @@
 #   3. moves C:\pc-base (the old name) to C:\tabula-rasa if needed, then clones or updates the public repo
 #      iheeae/tabula-rasa there; an unrelated copy (another origin, or no common history with origin/master)
 #      is moved to C:\tabula-rasa.old_<date>, nothing is deleted
-#   4. starts C:\tabula-rasa\setup.ps1 (selection window)
+#   4. starts C:\tabula-rasa\setup.ps1: it opens the program window in a hidden process and leaves one line
+#      here saying this console can be closed (the program itself shows no console)
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
@@ -148,7 +149,7 @@ if (Test-Path (Join-Path $Dest '.git')) {
     }
 } else {
     Say "Cloning $Repo into $Dest"
-    git clone --branch $Branch "https://github.com/$Repo.git" $Dest
+    git clone --quiet --branch $Branch "https://github.com/$Repo.git" $Dest
     if ($LASTEXITCODE -ne 0) { Say 'Clone failed' 'Red'; return }
 }
 

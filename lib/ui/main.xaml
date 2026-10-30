@@ -460,9 +460,8 @@
             <Border x:Name="RunBanner" Grid.Row="1" Margin="24,4,24,8" Padding="16,10" CornerRadius="6" Visibility="Collapsed"
                     Background="{DynamicResource AccentSoft}" BorderBrush="{DynamicResource AccentText}" BorderThickness="1">
                 <DockPanel>
-                    <Button x:Name="RebootBtn" DockPanel.Dock="Right" Content="Перезагрузить сейчас" Style="{StaticResource AccentButton}" Margin="16,0,0,0"/>
                     <TextBlock Style="{StaticResource Glyph}" Text="&#xE777;" Foreground="{DynamicResource AccentText}" Margin="0,0,10,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="Для завершения изменений нужна перезагрузка компьютера." VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    <TextBlock Text="Для завершения изменений нужна перезагрузка компьютера. Перезагрузить его можно кнопкой «Перезагрузить» внизу окна." VerticalAlignment="Center" TextWrapping="Wrap"/>
                 </DockPanel>
             </Border>
             <Grid Grid.Row="2">
@@ -581,6 +580,9 @@
                         <Button x:Name="RunStop" Content="Остановить после текущего" Margin="8,0,0,0"/>
                         <Button x:Name="RunRetry" Content="Повторить упавшее" Margin="8,0,0,0"/>
                         <Button x:Name="RunOpenLog" Content="Журналы" Margin="8,0,0,0" ToolTip="Открыть папку журналов выполнения и изменений"/>
+                        <Button x:Name="RunOpenReport" Content="Открыть отчёт" Margin="8,0,0,0" ToolTip="Открыть отчёт о прогоне в браузере"/>
+                        <Button x:Name="RunOpenFolder" Content="Открыть папку" Margin="8,0,0,0" ToolTip="Открыть папку с отчётами"/>
+                        <Button x:Name="RunReboot" Content="Перезагрузить" Margin="8,0,0,0" ToolTip="Перезагрузить компьютер"/>
                         <Button x:Name="RunApply" Content="Применить…" MinWidth="152" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
                         <Button x:Name="RunClose" Content="Закрыть" MinWidth="120" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
                     </StackPanel>

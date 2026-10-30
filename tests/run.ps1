@@ -350,6 +350,8 @@ try {
     $plan = Get-PbRunPlan $sel $aps $tws $stat
     $ph = ($plan | ForEach-Object { $_.Phase }) -join ''
     Check 'план: фазы по порядку' ($ph -eq '1223334567') $ph
+    $pn = @($plan | ForEach-Object { $_.PhaseName } | Select-Object -Unique) -join '|'
+    Check 'план: названия фаз совпадают с номерами' ($pn -eq 'Точка восстановления|Настройки Windows|Программы|Настройки программ|Файлы|Среда|Имя компьютера') $pn
     $notes = @{}; foreach ($x in $plan) { $notes[$x.Key] = $x.Note }
     Check 'план: пометки — обновление, уже установлено, сайт и мастер, нет настроек, необратимо, уже применено' ($notes['app:a1'] -eq 'обновление: 1 → 2' -and $notes['app:a3'] -match 'уже установлено' -and
         $notes['app:a2'] -match 'сайта' -and $notes['app:a2'] -match 'мастер' -and $notes['config:a3'] -match 'нет' -and $notes['tweak:p.irr'] -match 'необратимо' -and $notes['tweak:p.a'] -match 'уже применено') ($notes | ConvertTo-Json)
@@ -363,11 +365,32 @@ try {
     function Save-PbFiles ($Names) { Add-Result 'Файл' 'загружено' }
     function Rename-Computer { param($NewName, [switch]$Force) }
     function Request-PbAnswer ($Text, $Items) { $script:Asked = @($Items); $false }   # «не выполнять необратимое»
+    # отчёт — во временную папку, не в «Документы» этого компьютера
+    $script:PB.LogDir = Join-Path $tmp 'logs1'
+    function Get-PbReportDir { Join-Path $tmp 'reports' }
     $sync = [hashtable]::Synchronized(@{})
     Invoke-PbRun $plan $sel $aps $tws $sync 6>$null | Out-Null
     $states = ($plan | ForEach-Object { "$($_.Key)=$($_.State)" }) -join ' '
     Check 'прогон: без точки восстановления необратимое снято, ошибка и пропуск видны' ($states -eq 'restore=skip tweak:p.a=done tweak:p.irr=skip app:a1=done app:a2=error app:a3=done config:a3=skip files=done tweak:p.post=done rename=done') $states
     Check 'прогон: спросили про необратимое, итог и флаги' (($script:Asked -join ',') -eq 'Удалить X' -and $sync.Done -and $sync.NeedReboot -and ($plan | Where-Object Key -eq 'app:a2').Detail -match 'подпись' -and $script:PB.Upgrades -contains 'a1') $sync
+    $rep = [string]$sync.Report
+    $html = if ($rep -and (Test-Path $rep)) { Get-Content $rep -Raw -Encoding UTF8 } else { '' }
+    Check 'отчёт: в папке отчётов и копия в журналах' ($rep -like (Join-Path (Join-Path $tmp 'reports') 'report_*.html') -and
+        (Test-Path (Join-Path $script:PB.LogDir (Split-Path $rep -Leaf)))) $rep
+    $failBlock = if ($html -match '(?s)Что не получилось(.*?)</div>') { $Matches[1] } else { '' }
+    Check 'отчёт: ошибка в «Что не получилось», шаги по фазам, перезагрузка' ($failBlock -match 'Прог 2' -and $failBlock -match 'подпись не прошла' -and $failBlock -notmatch 'Прог 1' -and
+        $html -match 'Нужна перезагрузка' -and $html -match 'Настройки Windows' -and $html -match 'class="st error">ошибка' -and $html -match 'Выполнено: 6') ($html.Length)
+    $saveEnv = @{ USERPROFILE = $env:USERPROFILE; USERNAME = $env:USERNAME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
+    try {
+        $prof = 'C:\' + 'Users\' + 'jdoe'
+        $env:USERPROFILE = $prof; $env:USERNAME = 'jdoe'; $env:APPDATA = "$prof\AppData\Roaming"; $env:LOCALAPPDATA = "$prof\AppData\Local"
+        $p1 = Protect-PbReportText "$prof\AppData\Local\X\a.log; $prof\Desktop; пользователь jdoe; jdoe2"
+        Check 'отчёт: пути профиля — переменными, имя пользователя скрыто' ($p1 -eq '%LOCALAPPDATA%\X\a.log; %USERPROFILE%\Desktop; пользователь <пользователь>; jdoe2') $p1
+        $st = New-PbStep 3 'app' 'app:x' '<script>alert(1)</script> & Co' 'x'; $st.State = 'error'; $st.Detail = "$prof\a.txt"
+        $h2 = New-PbReportHtml @($st) @{ Computer = 'PC-01'; Windows = 'Windows 11'; Started = (Get-Date); Finished = (Get-Date); Engine = 'dev'; Manual = @('Войти <в> почту'); LogDir = 'C:\ProgramData\tabula-rasa\logs' }
+        Check 'отчёт: HTML экранирован, личного нет' ($h2 -notmatch '<script>' -and $h2 -match '&lt;script&gt;' -and $h2 -match '&amp; Co' -and $h2 -match 'Войти &lt;в&gt; почту' -and
+            $h2 -notmatch 'jdoe' -and $h2 -match '%USERPROFILE%\\a.txt' -and $h2 -match 'PC-01') ($h2.Length)
+    } finally { foreach ($k in $saveEnv.Keys) { Set-Item "env:$k" $saveEnv[$k] } }
     $plan2 = Get-PbRunPlan $sel $aps $tws $null
     $sync2 = [hashtable]::Synchronized(@{ StopAfter = $true })
     Invoke-PbRun $plan2 $sel $aps $tws $sync2 6>$null | Out-Null
@@ -380,6 +403,16 @@ try {
     '[{"Kind":"Reg"}]' | Set-Content (Join-Path $script:PB.LogDir 'changes_2026-10-30_090000.json')
     $logs = @(Get-PbChangeLogs)
     Check 'журналы для отката: новые первыми, дата из имени, число записей' ($logs.Count -eq 2 -and $logs[0].Count -eq 1 -and $logs[1].Date -eq [datetime]'2026-10-01 10:15:00' -and $logs[1].Count -eq 2) ($logs | ConvertTo-Json)
+
+    # ---------- заставка ----------
+    Write-Host 'заставка'
+    . (Join-Path (Join-Path $root 'lib') 'splash.ps1')
+    $sx = Get-PbSplashXaml
+    $okXml = $true; try { [void][xml]$sx } catch { $okXml = $false }
+    Check 'заставка: разметка — корректный XML, все цвета подставлены' ($okXml -and $sx -notmatch '"@\w+"' -and $sx -match 'x:Name="Step"' -and $sx -match 'PART_Indicator') $sx.Length
+    Set-PbSplash 'шаг' 0.5 6>$null
+    Close-PbSplash
+    Check 'заставка: без запуска — вызовы ничего не делают' ($null -eq $script:PbSplash)
 
     # ---------- имена ассетов ----------
     Write-Host 'имена ассетов'
